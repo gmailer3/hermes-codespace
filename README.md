@@ -76,30 +76,6 @@ Codespace start
 Service control: `scripts/start-hermes.sh [start|stop|status|restart]`.
 Startup transcript: `logs/autostart.log`. Health: `bash scripts/health-check.sh`.
 
-## Terminal status banner (nothing hidden)
-
-`postStartCommand` output goes to the dev-container's internal log, so
-`bootstrap.sh` additionally installs a small hook into `~/.bashrc`: **every
-new VS Code terminal** prints a Hermes status banner — Hermes installed?,
-Chromium, active provider/model, task runner + Telegram bot running?, and the
-last VM start result — plus where to look next (`logs/autostart.log`).
-
-```text
-────────────── Hermes Codespace ──────────────
-  Hermes:       INSTALLED (/home/vscode/.local/bin/hermes)
-  Browser:      Chromium OK
-  AI provider:  READY — nvidia_nim / z-ai/glm-5.3
-  Task runner:  RUNNING (pid 1234)
-  Telegram bot: RUNNING (pid 1240)
-  Last VM start: auto-start complete — Hermes services are up (no commands nee...
-  details: tail -30 logs/autostart.log    manage: scripts/start-hermes.sh status
-──────────────────────────────────────────────
-```
-
-To remove it, delete the marked `# >>> hermes-codespace status banner >>>`
-block from `~/.bashrc`. You can also print it any time with
-`bash scripts/status-banner.sh`.
-
 ## Model providers
 
 Active provider = `MODEL_PROVIDER` in `config/.env`; `FALLBACK_PROVIDER` is

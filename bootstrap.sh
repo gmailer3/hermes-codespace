@@ -318,27 +318,21 @@ else
   fi
 fi
 
+# --- terminal hook: every new Codespace terminal shows status + self-heals -----
+HOOK_LINE="[ -n \"\${PS1:-}\" ] && [ -f '$REPO_ROOT/scripts/terminal-hook.sh' ] && bash '$REPO_ROOT/scripts/terminal-hook.sh'"
+for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
+  [ -f "$rc" ] || [ "$rc" = "$HOME/.bashrc" ] || continue
+  touch "$rc"
+  if ! grep -q 'hermes-codespace terminal hook' "$rc" 2>/dev/null; then
+    printf '\n# hermes-codespace terminal hook\n%s\n' "$HOOK_LINE" >> "$rc"
+  fi
+done
+ok "terminal hook installed (new terminals show Hermes status)"
+
 # --- 7/7 validation ------------------------------------------------------------
 step "7/7 Validation"
 export PYTHONPATH="$REPO_ROOT/src"
 chmod +x scripts/*.sh 2>/dev/null || true
-
-# Make the status VISIBLE: print a Hermes banner in every new VS Code terminal
-# (postStartCommand output lives in the hidden dev-container log; this puts the
-# status in front of the user instead). Idempotent — replaces any previous block.
-RC_FILE="$HOME/.bashrc"
-B_START="# >>> hermes-codespace status banner (bootstrap.sh) >>>"
-B_END="# <<< hermes-codespace status banner (bootstrap.sh) <<<"
-touch "$RC_FILE"
-sed -i.bak "/^${B_START}$/,/^${B_END}$/d" "$RC_FILE" 2>/dev/null || true
-rm -f "$RC_FILE.bak"
-{
-  echo ""
-  echo "$B_START"
-  echo "if [ -t 1 ] && [ -f \"$REPO_ROOT/scripts/status-banner.sh\" ]; then bash \"$REPO_ROOT/scripts/status-banner.sh\"; fi"
-  echo "$B_END"
-} >> "$RC_FILE"
-ok "status banner installed in ~/.bashrc — every new VS Code terminal shows Hermes status"
 
 echo ""
 echo "=================================="

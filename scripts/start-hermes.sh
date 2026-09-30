@@ -35,7 +35,14 @@ start_one(){ # start_one NAME MODULE OUTLOG
     return 0
   fi
   rm -f "$pidf"
-  nohup python3 -u -m "$mod" >>"logs/$out" 2>&1 &
+  # setsid: own session, so the Codespace lifecycle hook finishing can't take
+  # the service down with it. 9>&- : don't inherit auto-start's lock fd
+  # (otherwise the lock stays held for as long as the service lives).
+  if command -v setsid >/dev/null 2>&1; then
+    setsid nohup python3 -u -m "$mod" </dev/null >>"logs/$out" 2>&1 9>&- &
+  else
+    nohup python3 -u -m "$mod" </dev/null >>"logs/$out" 2>&1 9>&- &
+  fi
   echo $! >"$pidf"
   sleep 1.5
   if pid_alive "$pidf" "$mod"; then
