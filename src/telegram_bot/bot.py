@@ -175,7 +175,7 @@ class Bot:
         rows = []
         ordered = sorted(snap.items(), key=lambda kv: kv[1]["mtime"], reverse=True)
         for tid, t in ordered[:25]:
-            rows.append(f"{ICONS.get(t['status'], '\u2022')} {tid}: {t['status']}"
+            rows.append(f"{ICONS.get(t['status'], chr(0x2022))} {tid}: {t['status']}"
                         + (f" (attempt {t['attempts']})" if t["attempts"] else ""))
         self.send(chat_id, "\U0001F4CB Tasks\n" + "\n".join(rows))
 
