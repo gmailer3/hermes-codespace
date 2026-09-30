@@ -1,0 +1,35 @@
+# Active provider = MODEL_PROVIDER; fallback = FALLBACK_PROVIDER (both in config/.env)
+# Each provider reads its key from the FIRST non-empty env var in key_env.
+# Keys arrive as GitHub Codespaces secrets (injected as environment variables) and
+# are copied into config/.env + ~/.hermes/.env by bootstrap.sh at setup time.
+providers:
+  google:
+    base_url: "https://generativelanguage.googleapis.com/v1beta/openai/"
+    key_env: [GEMINI_API_KEY]
+    default_model: "gemini-3-flash-preview"
+  openrouter:
+    base_url: "https://openrouter.ai/api/v1"
+    key_env: [OPENROUTER_API_KEY]
+    default_model: "google/gemini-3-flash-preview"
+    headers:
+      HTTP-Referer: "https://github.com/codespaces"
+      X-Title: "Hermes Codespace"
+  nvidia_nim:
+    base_url: "https://integrate.api.nvidia.com/v1"
+    key_env: [NVIDIA_NIM_API_KEY, NIM_API_KEY]
+    default_model: "meta/llama-3.3-70b-instruct"
+  openai:
+    base_url: "https://api.openai.com/v1"
+    key_env: [OPENAI_API_KEY, AI_API_KEY]
+    default_model: "gpt-4o-mini"
+  anthropic:
+    base_url: "https://api.anthropic.com/v1"
+    key_env: [ANTHROPIC_API_KEY, AI_API_KEY]
+    default_model: "claude-sonnet-4-5"
+  glm:
+    base_url: "https://open.bigmodel.cn/api/paas/v4"
+    key_env: [GLM_API_KEY, AI_API_KEY]
+    default_model: "glm-4.7"
+  custom:
+    base_url: "${CUSTOM_BASE_URL}"
+    key_env: [CUSTOM_API_KEY, AI_API_KEY]
