@@ -6,10 +6,11 @@ requirements.
 
 **Everything is automatic.** When the Codespace is created, `bootstrap.sh`
 installs Hermes (first, if missing), dependencies, Chromium, and pulls your
-API keys / Telegram token from Codespaces secrets. On every VM start,
-`scripts/auto-start.sh` checks whether Hermes is installed — if yes it just
-launches the services, if not it installs and sets up everything first, then
-launches. **You never need to run a command on VM start.**
+API keys / Telegram token from Codespaces secrets. On **every** VM start,
+`scripts/auto-start.sh` runs `bootstrap.sh` again — it is idempotent (only
+installs what is missing) and re-detects your secrets, so API keys added on
+GitHub after creation are picked up automatically — then it launches the
+services. **You never need to run a command on VM start.**
 
 ## Quick start (zero commands)
 
@@ -65,7 +66,8 @@ curl -fsSL https://raw.githubusercontent.com/USER/REPO/main/bootstrap.sh \
 ```text
 Codespace start
   └─ scripts/auto-start.sh          (devcontainer postStartCommand)
-       ├─ Hermes installed? ── no ─> bash bootstrap.sh --non-interactive
+       ├─ bash bootstrap.sh --non-interactive  (EVERY start: installs anything
+       │    missing + re-detects secrets/config; only seconds when up to date)
        └─ scripts/start-hermes.sh start
             ├─ task runner     (src/task_manager/runner.py, background)
             └─ Telegram bot   (src/telegram_bot/bot.py, if TELEGRAM_BOT_TOKEN set)
@@ -78,13 +80,14 @@ Startup transcript: `logs/autostart.log`. Health: `bash scripts/health-check.sh`
 
 Active provider = `MODEL_PROVIDER` in `config/.env`; `FALLBACK_PROVIDER` is
 used automatically if the primary fails. `bootstrap.sh` picks the first
-provider that has a key, in this order:
+provider that has a key — NVIDIA NIM has top priority and ships as the
+default (`z-ai/glm-5.3`):
 
 | Provider id | Key env var(s) | Example `MODEL_NAME` |
 |---|---|---|
+| `nvidia_nim` | `NVIDIA_NIM_API_KEY` | `z-ai/glm-5.3` (default), `meta/llama-3.3-70b-instruct` |
 | `google` | `GEMINI_API_KEY` | `gemini-3-flash-preview` |
 | `openrouter` | `OPENROUTER_API_KEY` | `google/gemini-3-flash-preview`, `anthropic/claude-sonnet-4.5` |
-| `nvidia_nim` | `NVIDIA_NIM_API_KEY` | `meta/llama-3.3-70b-instruct` |
 | `openai` | `OPENAI_API_KEY` / `AI_API_KEY` | `gpt-4o-mini` |
 | `anthropic` | `ANTHROPIC_API_KEY` / `AI_API_KEY` | `claude-sonnet-4-5` |
 | `glm` | `GLM_API_KEY` / `AI_API_KEY` | `glm-4.7` |

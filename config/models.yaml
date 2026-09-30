@@ -17,7 +17,7 @@ providers:
   nvidia_nim:
     base_url: "https://integrate.api.nvidia.com/v1"
     key_env: [NVIDIA_NIM_API_KEY, NIM_API_KEY]
-    default_model: "meta/llama-3.3-70b-instruct"
+    default_model: "z-ai/glm-5.3"
   openai:
     base_url: "https://api.openai.com/v1"
     key_env: [OPENAI_API_KEY, AI_API_KEY]

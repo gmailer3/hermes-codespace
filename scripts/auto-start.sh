@@ -2,11 +2,15 @@
 # VM-start hook — wired to devcontainer.json "postStartCommand" so the
 # Codespace needs ZERO manual commands.
 #
-#   Hermes installed?  ->  just launch the services (runner + Telegram bot)
-#   Hermes missing?     ->  run the full bootstrap (install + secrets + setup),
-#                           then launch.
+# On EVERY VM start:
+#   1. bash bootstrap.sh --non-interactive — idempotent: installs Hermes
+#      (first, if missing), refreshes Python deps + Chromium, and RE-DETECTS
+#      Codespaces secrets, so API keys added on GitHub after creation are
+#      picked up automatically
+#   2. scripts/start-hermes.sh start — task runner + Telegram bot (background)
 #
-# Everything is idempotent; a persistent copy of the transcript lands in
+# Re-running bootstrap when everything is already installed only takes a few
+# seconds (it skips what is in place). A persistent transcript lands in
 # logs/autostart.log.
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -30,17 +34,12 @@ if command -v flock >/dev/null 2>&1; then
   flock -n 9 || { echo "[..] auto-start already running — nothing to do"; exit 0; }
 fi
 
-if command -v hermes >/dev/null 2>&1; then
-  echo "[OK] Hermes installed ($(command -v hermes)) — launching services"
+# bootstrap on EVERY start (installs anything missing, refreshes secrets/config)
+if bash bootstrap.sh --non-interactive; then
+  echo "[OK] bootstrap complete"
 else
-  echo "[..] Hermes not installed — running full bootstrap first (one-time)"
-  if bash bootstrap.sh --non-interactive; then
-    echo "[OK] bootstrap finished"
-  else
-    echo "[FAIL] bootstrap failed — open logs/autostart.log, fix the reported problem,"
-    echo "       then run: bash bootstrap.sh"
-    exit 1
-  fi
+  echo "[WARN] bootstrap reported a failure — trying to launch services anyway"
+  echo "       (run 'bash bootstrap.sh' in a terminal to see the full report)"
 fi
 
 [ -f config/.env ] || { cp config/config.example.env config/.env; echo "[..] created config/.env from example"; }

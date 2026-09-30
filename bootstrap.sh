@@ -24,8 +24,9 @@
 #      | HERMES_CODESPACE_REPO=https://github.com/USER/REPO.git bash
 #
 #  In a Codespace you normally never need to run this by hand:
-#  devcontainer.json runs it on create, and scripts/auto-start.sh runs it on
-#  VM start when Hermes is missing — then launches everything automatically.
+#  devcontainer.json runs it on creation, and scripts/auto-start.sh runs it on
+#  EVERY VM start (installs anything missing + re-detects secrets), then the
+#  services launch automatically.
 # =============================================================================
 set -euo pipefail
 
@@ -128,23 +129,31 @@ ok "requirements installed"
 
 # --- 4/7 browser --------------------------------------------------------------
 step "4/7 Browser (Chromium via Playwright)"
-if have apt-get && { [ -z "$SUDO" ] || $SUDO -n true >/dev/null 2>&1; }; then
-  python3 -m playwright install-deps chromium >/dev/null 2>&1 || true
-fi
-python3 -m playwright install chromium >/dev/null || fail "Chromium install failed"
-python3 - <<'PY' || fail "Browser automation check failed"
+browser_ok(){
+  python3 - <<'PY'
 from playwright.sync_api import sync_playwright
 with sync_playwright() as p:
     b = p.chromium.launch(headless=True)
     pg = b.new_page(); pg.goto("about:blank"); b.close()
 PY
-ok "Chromium + browser automation"
+}
+if browser_ok >/dev/null 2>&1; then
+  ok "Chromium + browser automation (already present)"
+else
+  if have apt-get && { [ -z "$SUDO" ] || $SUDO -n true >/dev/null 2>&1; }; then
+    python3 -m playwright install-deps chromium >/dev/null 2>&1 || true
+  fi
+  python3 -m playwright install chromium >/dev/null || fail "Chromium install failed"
+  browser_ok >/dev/null 2>&1 || fail "Browser automation check failed"
+  ok "Chromium + browser automation"
+fi
 
 # --- 5/7 config + Codespaces secrets ------------------------------------------
 step "5/7 Environment + Codespaces secrets"
 CFG="config/.env"
 if [ -f "$CFG" ]; then ok "config/.env exists"; else cp config/config.example.env "$CFG"; ok "created config/.env from example"; fi
-sed -i.bak "s#^WORK_DIR=.*#WORK_DIR='$REPO_ROOT'#" "$CFG" && rm -f "$CFG.bak"
+sed -i.bak "s#^WORK_DIR=.*#WORK_DIR='$REPO_ROOT'#" "$CFG" || true
+rm -f "$CFG.bak"
 
 HERMES_ENV="$HOME/.hermes/.env"
 mkdir -p "$HOME/.hermes"
@@ -163,7 +172,9 @@ write_env(){ # write_env FILE KEY VALUE — idempotent, single-quoted value
 save_secret(){ # save_secret KEY VALUE — project config + Hermes CLI config
   write_env "$CFG" "$1" "$2"
   write_env "$HERMES_ENV" "$1" "$2"
-  [ "$1" = GEMINI_API_KEY ] && write_env "$HERMES_ENV" GOOGLE_API_KEY "$2"
+  # note: must not end in a failing `&&` chain — this runs under `set -e`
+  if [ "$1" = GEMINI_API_KEY ]; then write_env "$HERMES_ENV" GOOGLE_API_KEY "$2"; fi
+  return 0
 }
 
 # env var -> canonical key (aliases map onto the canonical name)
@@ -273,17 +284,17 @@ has_key(){ case "$1" in
   *) return 1 ;;
 esac }
 DEFAULT_MODEL(){ case "$1" in
+  nvidia_nim) echo "z-ai/glm-5.3" ;;
   google) echo "gemini-3-flash-preview" ;;
   openrouter) echo "google/gemini-3-flash-preview" ;;
-  nvidia_nim) echo "meta/llama-3.3-70b-instruct" ;;
   openai) echo "gpt-4o-mini" ;;
   anthropic) echo "claude-sonnet-4-5" ;;
   glm) echo "glm-4.7" ;;
   *) echo "" ;;
 esac }
-ORDER="google openrouter nvidia_nim openai anthropic glm custom"
+ORDER="nvidia_nim google openrouter openai anthropic glm custom"
 
-CUR="${MODEL_PROVIDER:-google}"
+CUR="${MODEL_PROVIDER:-nvidia_nim}"
 if has_key "$CUR"; then
   ok "provider '$CUR' has a key (MODEL_NAME=${MODEL_NAME:-<default>})"
 else
@@ -294,11 +305,11 @@ else
   done
   if [ -n "$PICK" ]; then
     warn "configured provider '$CUR' has no key — switching to '$PICK'"
-    sed -i.bak "s#^MODEL_PROVIDER=.*#MODEL_PROVIDER=$PICK#" "$CFG" && rm -f "$CFG.bak"
-    sed -i.bak "s#^MODEL_NAME=.*#MODEL_NAME=$(DEFAULT_MODEL "$PICK")#" "$CFG" && rm -f "$CFG.bak"
+    sed -i.bak "s#^MODEL_PROVIDER=.*#MODEL_PROVIDER=$PICK#" "$CFG" || true; rm -f "$CFG.bak"
+    sed -i.bak "s#^MODEL_NAME=.*#MODEL_NAME=$(DEFAULT_MODEL "$PICK")#" "$CFG" || true; rm -f "$CFG.bak"
     if [ -n "$FALL" ]; then
-      sed -i.bak "s#^FALLBACK_PROVIDER=.*#FALLBACK_PROVIDER=$FALL#" "$CFG" && rm -f "$CFG.bak"
-      sed -i.bak "s#^FALLBACK_MODEL=.*#FALLBACK_MODEL=$(DEFAULT_MODEL "$FALL")#" "$CFG" && rm -f "$CFG.bak"
+      sed -i.bak "s#^FALLBACK_PROVIDER=.*#FALLBACK_PROVIDER=$FALL#" "$CFG" || true; rm -f "$CFG.bak"
+      sed -i.bak "s#^FALLBACK_MODEL=.*#FALLBACK_MODEL=$(DEFAULT_MODEL "$FALL")#" "$CFG" || true; rm -f "$CFG.bak"
     fi
     set -a; . "$CFG"; set +a
     ok "provider: $PICK${FALL:+ (fallback: $FALL)}"
@@ -325,7 +336,7 @@ ok "config/.env ready (secrets: config/.env + ~/.hermes/.env, both chmod 600)"
 KEYS=""
 for k in GEMINI_API_KEY OPENROUTER_API_KEY NVIDIA_NIM_API_KEY OPENAI_API_KEY \
          ANTHROPIC_API_KEY GLM_API_KEY CUSTOM_API_KEY AI_API_KEY; do
-  [ -n "${!k:-}" ] && KEYS="$KEYS $k"
+  if [ -n "${!k:-}" ]; then KEYS="$KEYS $k"; fi
 done
 if [ -n "$KEYS" ]; then ok "API keys present:$KEYS"; else warn "no AI API keys yet"; fi
 

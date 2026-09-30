@@ -10,7 +10,7 @@ load_dotenv(ROOT / "config" / ".env")
 
 @dataclass
 class Settings:
-    provider: str = os.getenv("MODEL_PROVIDER", "google")
+    provider: str = os.getenv("MODEL_PROVIDER", "nvidia_nim")
     model: str = os.getenv("MODEL_NAME", "")
     fallback_provider: str = os.getenv("FALLBACK_PROVIDER", "")
     fallback_model: str = os.getenv("FALLBACK_MODEL", "")
