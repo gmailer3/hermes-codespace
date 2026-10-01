@@ -1,0 +1,37 @@
+{
+  "name": "Hermes Codespace",
+  "build": { "dockerfile": "Dockerfile", "context": ".." },
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": { "version": "lts" },
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+  "hostRequirements": { "cpus": 4, "memory": "8gb" },
+  "postCreateCommand": "bash .devcontainer/setup.sh --non-interactive",
+  "postStartCommand": "bash scripts/auto-start.sh",
+  "postAttachCommand": "bash scripts/terminal-attach.sh",
+  "waitFor": "postCreateCommand",
+  "remoteEnv": {
+    "WORK_DIR": "${containerWorkspaceFolder}",
+    "PYTHONPATH": "${containerWorkspaceFolder}/src"
+  },
+  "secrets": {
+    "NVIDIA_NIM_API_KEY": { "description": "PRIMARY: NVIDIA NIM key (build.nvidia.com -> Get API Key). Auto-configures GLM-5.3 via https://integrate.api.nvidia.com/v1. Aliases also detected: NVIDIA_API_KEY, NIM_API_KEY." },
+    "TELEGRAM_BOT_TOKEN": { "description": "Telegram bot token from @BotFather. Read straight from secrets — the bot starts automatically, no setup questions." },
+    "TELEGRAM_CHAT_ID": { "description": "Chat id(s) allowed to command the bot, comma-separated (alias TELEGRAM_CLIENT_ID also works). Send /start to the bot to learn your id." },
+    "GEMINI_API_KEY": { "description": "Optional fallback provider: Google AI Studio key (aistudio.google.com/apikey)" },
+    "OPENROUTER_API_KEY": { "description": "Optional fallback provider: OpenRouter key (openrouter.ai/keys)" },
+    "OPENAI_API_KEY": { "description": "Optional provider: OpenAI key (platform.openai.com)" },
+    "ANTHROPIC_API_KEY": { "description": "Optional provider: Anthropic key (console.anthropic.com)" },
+    "GLM_API_KEY": { "description": "Optional provider: Zhipu/GLM key (open.bigmodel.cn)" },
+    "AI_API_KEY": { "description": "Optional: generic key for openai/anthropic/glm/custom providers" },
+    "CUSTOM_BASE_URL": { "description": "Optional: base URL of any other OpenAI-compatible endpoint (used with CUSTOM_API_KEY)" },
+    "CUSTOM_API_KEY": { "description": "Optional: key for the CUSTOM_BASE_URL endpoint" },
+    "WEBSITE_CREDENTIALS": { "description": "Optional: credentials for the authorized target website (JSON)" }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-python.python", "ms-azuretools.vscode-docker"],
+      "settings": { "terminal.integrated.defaultProfile.linux": "bash" }
+    }
+  }
+}

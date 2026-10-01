@@ -1,0 +1,15 @@
+config/.env
+*.env
+!config/config.example.env
+client_data/*
+!client_data/.gitkeep
+tasks/*
+!tasks/.gitkeep
+logs/*
+!logs/.gitkeep
+screenshots/*
+!screenshots/.gitkeep
+.run/
+__pycache__/
+*.pyc
+.venv/

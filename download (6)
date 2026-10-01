@@ -1,0 +1,6 @@
+# Force LF: CRLF shell scripts (Windows checkout) break every Codespace hook
+* text=auto eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+*.json text eol=lf
+*.env text eol=lf

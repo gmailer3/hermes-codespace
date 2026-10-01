@@ -1,32 +1,33 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  Hermes Codespace — ONE-COMMAND BOOTSTRAP
+#  Hermes Codespace — ZERO-TOUCH BOOTSTRAP
 #
-#  What it does (idempotent — safe to re-run any time):
-#    1. Installs the NousResearch Hermes agent  — FIRST, if not already installed
+#  Fully automatic: no prompts, no menus, no model-setup wizard, no Telegram
+#  setup questions. Safe to re-run any time (idempotent). What it does:
+#    1. Installs base tooling + the NousResearch Hermes agent (if missing)
 #    2. Installs Python dependencies + Chromium (Playwright)
-#    3. Detects API keys / Telegram token from GitHub Codespaces secrets
-#       (Codespaces injects them as environment variables) and writes them to
-#       config/.env (project, gitignored) and ~/.hermes/.env (Hermes CLI, 0600)
-#    4. Interactive only: menu to add/replace keys — Gemini, OpenRouter,
-#       NVIDIA NIM, OpenAI, Anthropic, GLM, custom OpenAI-compatible endpoint,
-#       Telegram bot token + authorized chat id
-#    5. Auto-selects the AI provider based on which keys are present
-#    6. Validates everything and prints a summary; can start services
+#    3. Detects API keys / Telegram credentials from GitHub Codespaces secrets
+#       (injected as environment variables) and writes them to config/.env
+#       (project, gitignored) and ~/.hermes/.env (Hermes CLI, chmod 600)
+#    4. Auto-configures the model: NVIDIA NIM + z-ai/glm-5.3 has top priority;
+#       the first provider with a detected key becomes active, the second one
+#       becomes the fallback. There is NO model setup step to answer.
+#    5. Telegram is configured purely from TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID
+#       secrets — never prompted for.
+#    6. Prints a summary; with --launch (or on an interactive terminal) it also
+#       starts the task runner + Telegram bot.
 #
-#  Usage:
-#    bash bootstrap.sh                     # interactive (menu to add API keys)
-#    bash bootstrap.sh --non-interactive   # unattended (Codespace create / hooks)
-#    bash bootstrap.sh --launch            # also start runner + Telegram bot
+#  Usage (all optional — normally you never run this by hand):
+#    bash bootstrap.sh                 # same as --non-interactive everywhere
+#    bash bootstrap.sh --launch        # also start runner + Telegram bot
+#
+#  In a Codespace you never need this: devcontainer.json runs it on creation,
+#  and scripts/auto-start.sh re-runs it on EVERY VM start (installs anything
+#  missing, re-detects secrets) and then launches the services automatically.
 #
 #  On any Linux VM without the repo (replace USER/REPO with yours):
 #    curl -fsSL https://raw.githubusercontent.com/USER/REPO/main/bootstrap.sh \
 #      | HERMES_CODESPACE_REPO=https://github.com/USER/REPO.git bash
-#
-#  In a Codespace you normally never need to run this by hand:
-#  devcontainer.json runs it on creation, and scripts/auto-start.sh runs it on
-#  EVERY VM start (installs anything missing + re-detects secrets), then the
-#  services launch automatically.
 # =============================================================================
 set -euo pipefail
 
@@ -34,11 +35,11 @@ NON_INTERACTIVE=0
 LAUNCH=0
 for a in "$@"; do
   case "$a" in
-    --non-interactive|-n) NON_INTERACTIVE=1 ;;
-    --launch|-l)          LAUNCH=1 ;;
-    -h|--help)            if [ -f "$0" ]; then sed -n '2,29p' "$0" | sed 's/^#\{1,\} \{0,1\}//';
-                          else echo "Run 'bash bootstrap.sh --help' from inside the repo."; fi
-                          exit 0 ;;
+    --non-interactive|-n|--auto|-a) NON_INTERACTIVE=1 ;;   # default behaviour; kept for compatibility
+    --launch|-l)                    LAUNCH=1 ;;
+    -h|--help)                      if [ -f "$0" ]; then sed -n '2,30p' "$0" | sed 's/^#\{1,\} \{0,1\}//';
+                                    else echo "Run 'bash bootstrap.sh --help' from inside the repo."; fi
+                                    exit 0 ;;
     *) echo "unknown option: $a (see --help)" >&2; exit 2 ;;
   esac
 done
@@ -81,7 +82,7 @@ apt_install(){ # apt_install PKG...
 INTERACTIVE=0
 [ "$NON_INTERACTIVE" = 0 ] && [ -t 0 ] && [ -t 1 ] && INTERACTIVE=1
 
-step "Hermes Codespace bootstrap"
+step "Hermes Codespace bootstrap (fully automatic — nothing to answer)"
 echo "OS: $(uname -s) ($(uname -m)) — repo: $REPO_ROOT"
 [ "$(uname -s)" = "Linux" ] || warn "not Linux — continuing best-effort"
 
@@ -101,6 +102,10 @@ fi
 ok "pip $(python3 -m pip --version 2>/dev/null | awk '{print $2}')"
 
 # --- 2/7 Hermes agent (installed FIRST, only if missing) ----------------------
+# Non-fatal by design: the task runner itself is pure Python, so if the upstream
+# installer is unreachable the model/Telegram setup below must still complete.
+# The VM-start hook re-runs this script, so a failed install is retried on the
+# next start automatically.
 step "2/7 Hermes agent"
 export PATH="$HOME/.local/bin:$HOME/.hermes/bin:$PATH"
 if have hermes; then
@@ -108,15 +113,13 @@ if have hermes; then
 else
   warn "Hermes not found — installing from NousResearch/hermes-agent (this can take a few minutes)"
   HERMES_INSTALL_URL="${HERMES_INSTALL_URL:-https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh}"
-  if [ "$INTERACTIVE" = 1 ]; then
-    curl -fsSL "$HERMES_INSTALL_URL" | bash || fail "Hermes install failed — see output above"
-  else
-    curl -fsSL "$HERMES_INSTALL_URL" | bash -s -- --non-interactive \
-      || fail "Hermes install failed — see output above and ~/.hermes/logs/install.log"
+  if curl -fsSL "$HERMES_INSTALL_URL" | bash -s -- --non-interactive; then :; else
+    warn "Hermes install failed — continuing with model/Telegram setup;"
+    warn "the install is retried automatically on the next VM start."
   fi
   export PATH="$HOME/.local/bin:$HOME/.hermes/bin:$PATH"
-  have hermes || fail "installer finished but 'hermes' is still missing (check ~/.hermes/logs/install.log)"
-  ok "Hermes installed: $(command -v hermes)"
+  if have hermes; then ok "Hermes installed: $(command -v hermes)"
+  else warn "Hermes binary not present yet (auto-retry on next start)"; fi
 fi
 
 # --- 3/7 Python dependencies --------------------------------------------------
@@ -149,7 +152,7 @@ else
 fi
 
 # --- 5/7 config + Codespaces secrets ------------------------------------------
-step "5/7 Environment + Codespaces secrets"
+step "5/7 Environment + Codespaces secrets (auto-detected, nothing to type)"
 CFG="config/.env"
 if [ -f "$CFG" ]; then ok "config/.env exists"; else cp config/config.example.env "$CFG"; ok "created config/.env from example"; fi
 sed -i.bak "s#^WORK_DIR=.*#WORK_DIR='$REPO_ROOT'#" "$CFG" || true
@@ -177,14 +180,19 @@ save_secret(){ # save_secret KEY VALUE — project config + Hermes CLI config
   return 0
 }
 
-# env var -> canonical key (aliases map onto the canonical name)
+# env var -> canonical key (aliases map onto the canonical name). Codespaces
+# injects repository secrets as environment variables, so all of these arrive
+# with ZERO configuration: the NVIDIA key, the Telegram bot token and the
+# authorized chat id are picked up automatically.
 DETECT="
+NVIDIA_NIM_API_KEY:NVIDIA_NIM_API_KEY
+NVIDIA_API_KEY:NVIDIA_NIM_API_KEY
+NVIDIA_NIM_KEY:NVIDIA_NIM_API_KEY
+NIM_API_KEY:NVIDIA_NIM_API_KEY
+NVAPI_KEY:NVIDIA_NIM_API_KEY
 GOOGLE_API_KEY:GEMINI_API_KEY
 GEMINI_API_KEY:GEMINI_API_KEY
 OPENROUTER_API_KEY:OPENROUTER_API_KEY
-NVIDIA_API_KEY:NVIDIA_NIM_API_KEY
-NIM_API_KEY:NVIDIA_NIM_API_KEY
-NVIDIA_NIM_API_KEY:NVIDIA_NIM_API_KEY
 OPENAI_API_KEY:OPENAI_API_KEY
 ANTHROPIC_API_KEY:ANTHROPIC_API_KEY
 ZHIPU_API_KEY:GLM_API_KEY
@@ -194,6 +202,7 @@ CUSTOM_API_KEY:CUSTOM_API_KEY
 AI_API_KEY:AI_API_KEY
 WEBSITE_CREDENTIALS:WEBSITE_CREDENTIALS
 TELEGRAM_BOT_TOKEN:TELEGRAM_BOT_TOKEN
+TELEGRAM_CLIENT_ID:TELEGRAM_CHAT_ID
 TELEGRAM_CHAT_ID:TELEGRAM_CHAT_ID
 TARGET_URL:TARGET_URL
 ALLOWED_DOMAINS:ALLOWED_DOMAINS
@@ -210,68 +219,15 @@ while read -r pair; do
 done <<< "$DETECT"
 if [ "$FOUND" = 0 ]; then
   warn "no secrets detected. Add them in GitHub: repo -> Settings -> Secrets and"
-  warn "variables -> Codespaces (GEMINI_API_KEY, OPENROUTER_API_KEY, NVIDIA_NIM_API_KEY,"
-  warn "TELEGRAM_BOT_TOKEN, ...) then re-run 'bash bootstrap.sh' — or use the menu below."
+  warn "variables -> Codespaces (NVIDIA_NIM_API_KEY, TELEGRAM_BOT_TOKEN,"
+  warn "TELEGRAM_CHAT_ID, ...) — they are picked up automatically on the next start."
 fi
 
-# --- 5b interactive key menu (only on a TTY) ----------------------------------
-if [ "$INTERACTIVE" = 1 ]; then
-  step "Add / update API keys (optional)"
-  cat <<'MENU'
-Detected keys are shown above. You can add or replace one now (input is hidden).
-  1) Gemini        GEMINI_API_KEY       aistudio.google.com/apikey
-  2) OpenRouter    OPENROUTER_API_KEY   openrouter.ai/keys
-  3) NVIDIA NIM    NVIDIA_NIM_API_KEY   build.nvidia.com -> Get API Key
-  4) OpenAI        OPENAI_API_KEY       platform.openai.com
-  5) Anthropic     ANTHROPIC_API_KEY    console.anthropic.com
-  6) GLM (Zhipu)   GLM_API_KEY          open.bigmodel.cn
-  7) Custom OpenAI-compatible endpoint (base URL + key)
-  8) Telegram bot  TELEGRAM_BOT_TOKEN (from @BotFather) + TELEGRAM_CHAT_ID
-  9) Done / continue
-MENU
-  read_secret(){ # read_secret KEY LABEL
-    local k=$1 label=$2 v
-    if read -rsp "$label (hidden, blank = skip): " v; then :; else v=""; fi
-    echo ""
-    if [ -n "$v" ]; then
-      save_secret "$k" "$v"
-      ok "$k saved to config/.env and ~/.hermes/.env"
-    else
-      warn "$k skipped (empty input)"
-    fi
-  }
-  while true; do
-    printf 'Choice [9]: '
-    read -r ch || break
-    ch="${ch:-9}"
-    case "$ch" in
-      1) read_secret GEMINI_API_KEY "Gemini API key" ;;
-      2) read_secret OPENROUTER_API_KEY "OpenRouter API key" ;;
-      3) read_secret NVIDIA_NIM_API_KEY "NVIDIA NIM API key" ;;
-      4) read_secret OPENAI_API_KEY "OpenAI API key" ;;
-      5) read_secret ANTHROPIC_API_KEY "Anthropic API key" ;;
-      6) read_secret GLM_API_KEY "GLM API key" ;;
-      7) BU=""
-         if read -rp "Custom base URL (OpenAI-compatible, e.g. https://host/v1): " BU && [ -n "$BU" ]; then
-           write_env "$CFG" CUSTOM_BASE_URL "$BU"; write_env "$HERMES_ENV" CUSTOM_BASE_URL "$BU"
-           read_secret CUSTOM_API_KEY "Custom endpoint API key"
-           ok "custom endpoint saved"
-         fi ;;
-      8) read_secret TELEGRAM_BOT_TOKEN "Telegram bot token"
-         TCI=""
-         if read -rp "Authorized Telegram chat id(s), comma-separated (optional): " TCI && [ -n "$TCI" ]; then
-           write_env "$CFG" TELEGRAM_CHAT_ID "$TCI"; write_env "$HERMES_ENV" TELEGRAM_CHAT_ID "$TCI"
-           ok "TELEGRAM_CHAT_ID saved"
-         fi ;;
-      9|q|Q) break ;;
-      *) echo "invalid choice" ;;
-    esac
-  done
-  set -a; . "$CFG"; set +a   # pick up keys just entered
-fi
-
-# --- 6/7 AI provider selection -------------------------------------------------
-step "6/7 AI provider selection"
+# --- 6/7 AI provider + model (automatic — the model setup is SKIPPED) ---------
+# Priority order: NVIDIA NIM (z-ai/glm-5.3) first, then the rest. The active
+# provider is the configured one if it has a key, otherwise the first provider
+# in priority order that does. Model names are auto-filled; nothing is asked.
+step "6/7 AI provider + model (auto-configured)"
 set -a; . "$CFG"; set +a
 has_key(){ case "$1" in
   google)     [ -n "${GEMINI_API_KEY:-}" ] ;;
@@ -294,28 +250,56 @@ DEFAULT_MODEL(){ case "$1" in
 esac }
 ORDER="nvidia_nim google openrouter openai anthropic glm custom"
 
-CUR="${MODEL_PROVIDER:-nvidia_nim}"
-if has_key "$CUR"; then
-  ok "provider '$CUR' has a key (MODEL_NAME=${MODEL_NAME:-<default>})"
+ACTIVE=""
+CUR="${MODEL_PROVIDER:-}"
+if [ -n "$CUR" ] && has_key "$CUR"; then
+  ACTIVE="$CUR"
 else
-  PICK=""; FALL=""
+  for p in $ORDER; do has_key "$p" && { ACTIVE="$p"; break; }; done
+fi
+
+if [ -n "$ACTIVE" ]; then
+  # keep an explicitly chosen model only when the provider itself is unchanged
+  if [ "$ACTIVE" = "$CUR" ] && [ -n "${MODEL_NAME:-}" ]; then MN="$MODEL_NAME"
+  else MN="$(DEFAULT_MODEL "$ACTIVE")"; fi
+  # fallback = next provider in priority order that also has a key
+  FALL=""
   for p in $ORDER; do
-    has_key "$p" || continue
-    if [ -z "$PICK" ]; then PICK="$p"; else FALL="$p"; break; fi
+    [ "$p" = "$ACTIVE" ] && continue
+    has_key "$p" && { FALL="$p"; break; }
   done
-  if [ -n "$PICK" ]; then
-    warn "configured provider '$CUR' has no key — switching to '$PICK'"
-    sed -i.bak "s#^MODEL_PROVIDER=.*#MODEL_PROVIDER=$PICK#" "$CFG" || true; rm -f "$CFG.bak"
-    sed -i.bak "s#^MODEL_NAME=.*#MODEL_NAME=$(DEFAULT_MODEL "$PICK")#" "$CFG" || true; rm -f "$CFG.bak"
-    if [ -n "$FALL" ]; then
-      sed -i.bak "s#^FALLBACK_PROVIDER=.*#FALLBACK_PROVIDER=$FALL#" "$CFG" || true; rm -f "$CFG.bak"
-      sed -i.bak "s#^FALLBACK_MODEL=.*#FALLBACK_MODEL=$(DEFAULT_MODEL "$FALL")#" "$CFG" || true; rm -f "$CFG.bak"
-    fi
-    set -a; . "$CFG"; set +a
-    ok "provider: $PICK${FALL:+ (fallback: $FALL)}"
-  else
-    warn "no AI provider key found yet — services will wait until one is added"
+  sed -i.bak "s#^MODEL_PROVIDER=.*#MODEL_PROVIDER=$ACTIVE#" "$CFG" || true; rm -f "$CFG.bak"
+  sed -i.bak "s#^MODEL_NAME=.*#MODEL_NAME=$MN#" "$CFG" || true; rm -f "$CFG.bak"
+  sed -i.bak "s#^FALLBACK_PROVIDER=.*#FALLBACK_PROVIDER=$FALL#" "$CFG" || true; rm -f "$CFG.bak"
+  sed -i.bak "s#^FALLBACK_MODEL=.*#FALLBACK_MODEL=$(DEFAULT_MODEL "$FALL")#" "$CFG" || true; rm -f "$CFG.bak"
+  write_env "$HERMES_ENV" MODEL_PROVIDER "$ACTIVE"
+  write_env "$HERMES_ENV" MODEL_NAME "$MN"
+  # every provider here is used as an OpenAI-compatible endpoint: export the
+  # standard OPENAI_* variables for the ACTIVE provider so the Hermes CLI (and
+  # any OpenAI-compatible tool) is configured automatically — the model setup
+  # wizard is entirely skipped.
+  BU="" ; KEY=""
+  case "$ACTIVE" in
+    nvidia_nim) BU="https://integrate.api.nvidia.com/v1";                 KEY="${NVIDIA_NIM_API_KEY:-}" ;;
+    google)     BU="https://generativelanguage.googleapis.com/v1beta/openai"; KEY="${GEMINI_API_KEY:-}" ;;
+    openrouter) BU="https://openrouter.ai/api/v1";                        KEY="${OPENROUTER_API_KEY:-}" ;;
+    openai)     BU="https://api.openai.com/v1";                           KEY="${OPENAI_API_KEY:-${AI_API_KEY:-}}" ;;
+    anthropic)  BU="https://api.anthropic.com/v1";                        KEY="${ANTHROPIC_API_KEY:-${AI_API_KEY:-}}" ;;
+    glm)        BU="https://open.bigmodel.cn/api/paas/v4";                KEY="${GLM_API_KEY:-${AI_API_KEY:-}}" ;;
+    custom)     BU="${CUSTOM_BASE_URL:-}";                                KEY="${CUSTOM_API_KEY:-${AI_API_KEY:-}}" ;;
+  esac
+  if [ -n "$BU" ] && [ -n "$KEY" ]; then
+    write_env "$HERMES_ENV" OPENAI_BASE_URL "$BU"
+    write_env "$HERMES_ENV" OPENAI_API_BASE "$BU"
+    write_env "$HERMES_ENV" OPENAI_API_KEY "$KEY"
   fi
+  set -a; . "$CFG"; set +a
+  [ "$ACTIVE" = "$CUR" ] || warn "configured provider '${CUR:-none}' has no key — switched automatically"
+  ok "active provider: $ACTIVE / ${MN:-<provider default>}${FALL:+ (fallback: $FALL / $(DEFAULT_MODEL "$FALL"))}"
+  [ "$ACTIVE" = nvidia_nim ] && ok "NVIDIA NIM endpoint: https://integrate.api.nvidia.com/v1 (model z-ai/glm-5.3)"
+else
+  warn "no AI provider key found yet — services start once a key secret exists"
+  warn "(add e.g. NVIDIA_NIM_API_KEY under repo -> Settings -> Secrets -> Codespaces)"
 fi
 
 # --- terminal hook: every new Codespace terminal shows status + self-heals -----
@@ -340,38 +324,32 @@ echo " Hermes Codespace — Setup Summary"
 echo "=================================="
 ok "Python $(python3 --version 2>/dev/null | cut -d' ' -f2)"
 if have node; then ok "Node.js $(node --version)"; else warn "Node.js missing"; fi
-have hermes && ok "Hermes ($(command -v hermes))" || fail "Hermes missing"
+if have hermes; then ok "Hermes ($(command -v hermes))"; else warn "Hermes missing — auto-retried on next VM start"; fi
 ok "Chromium + Playwright automation"
 ok "config/.env ready (secrets: config/.env + ~/.hermes/.env, both chmod 600)"
 
 KEYS=""
-for k in GEMINI_API_KEY OPENROUTER_API_KEY NVIDIA_NIM_API_KEY OPENAI_API_KEY \
+for k in NVIDIA_NIM_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY OPENAI_API_KEY \
          ANTHROPIC_API_KEY GLM_API_KEY CUSTOM_API_KEY AI_API_KEY; do
   if [ -n "${!k:-}" ]; then KEYS="$KEYS $k"; fi
 done
 if [ -n "$KEYS" ]; then ok "API keys present:$KEYS"; else warn "no AI API keys yet"; fi
 
-if [ -n "${TELEGRAM_BOT_TOKEN:-}" ]; then ok "Telegram bot token set"
+if [ -n "${TELEGRAM_BOT_TOKEN:-}" ]; then ok "Telegram bot token set (from secrets — bot auto-starts)"
 else echo "[ -- ] TELEGRAM_BOT_TOKEN not set (Telegram control is optional)"; fi
 if [ -n "${TELEGRAM_CHAT_ID:-}" ]; then ok "TELEGRAM_CHAT_ID set (${TELEGRAM_CHAT_ID})"
 else warn "TELEGRAM_CHAT_ID not set — the bot will only reveal chat ids via /start"; fi
 
-if python3 -m configuration.llm --check; then
+if [ -n "${MODEL_PROVIDER:-}" ] && python3 -m configuration.llm --check; then
   ok "AI provider reachable: ${MODEL_PROVIDER:-?} / ${MODEL_NAME:-default}"
 else
-  warn "provider probe failed — fix the key/model/network later and re-run 'bash bootstrap.sh'"
+  warn "provider probe failed — the key/model/network is re-checked on every VM start"
 fi
 
 echo ""
-echo "All set. Services start automatically whenever this Codespace/VM starts"
-echo "(scripts/auto-start.sh -> no commands needed)."
-if [ "$LAUNCH" = 1 ]; then
+echo "All set — no manual steps. On every Codespace/VM start, scripts/auto-start.sh"
+echo "re-checks Hermes, re-detects secrets, re-configures the model and launches"
+echo "the task runner + Telegram bot automatically."
+if [ "$LAUNCH" = 1 ] || [ "$INTERACTIVE" = 1 ]; then
   bash scripts/start-hermes.sh start || warn "services failed to start (see messages above)"
-elif [ "$INTERACTIVE" = 1 ]; then
-  ans=""
-  if read -rp "Start Hermes services now? [Y/n]: " ans; then :; else ans="y"; fi
-  case "${ans:-y}" in
-    [nN]*) echo "Skipped. Start later with: scripts/start-hermes.sh" ;;
-    *) bash scripts/start-hermes.sh start || warn "services failed to start (see messages above)" ;;
-  esac
 fi
