@@ -1,0 +1,10 @@
+name: codespace-guard
+version: 1.0.0
+description: >
+  Hermes Codespace helpers. (1) Replaces corrupted punctuation-only model
+  replies (the "!!!!!!!!" glitch from hosted NIM endpoints) with a clear
+  notice instead of forwarding garbage to Telegram. (2) Reminds the model to
+  deliver browser screenshots as real photos (MEDIA:) on messaging platforms.
+provides_hooks:
+  - transform_llm_output
+  - pre_llm_call

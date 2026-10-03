@@ -25,7 +25,9 @@ warnchk(){ # soft check: never fails the run
   fi
 }
 
-chk "Hermes binary"          "command -v hermes || test -x \$HOME/.local/bin/hermes || test -x \$HOME/.hermes/bin/hermes"
+# The task runner is pure Python; the Hermes CLI is installed/retried by
+# bootstrap.sh on every VM start, so a missing binary is a warning, not a blocker.
+warnchk "Hermes binary"      "command -v hermes || test -x \$HOME/.local/bin/hermes || test -x \$HOME/.hermes/bin/hermes"
 chk "Python 3"              "python3 --version"
 chk "Chromium (Playwright)"  "python3 -c 'from playwright.sync_api import sync_playwright as s; p=s().start(); p.chromium.launch().close(); p.stop()'"
 chk "AI API key present"     "test -n \"\${GEMINI_API_KEY:-}\${OPENROUTER_API_KEY:-}\${NVIDIA_NIM_API_KEY:-}\${OPENAI_API_KEY:-}\${ANTHROPIC_API_KEY:-}\${GLM_API_KEY:-}\${CUSTOM_API_KEY:-}\${AI_API_KEY:-}\""

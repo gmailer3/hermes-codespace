@@ -16,8 +16,8 @@ providers:
       X-Title: "Hermes Codespace"
   nvidia_nim:
     base_url: "https://integrate.api.nvidia.com/v1"
-    key_env: [NVIDIA_NIM_API_KEY, NIM_API_KEY]
-    default_model: "z-ai/glm-5.3"
+    key_env: [NVIDIA_NIM_API_KEY, NVIDIA_API_KEY, NIM_API_KEY]
+    default_model: "moonshotai/kimi-k3"
   openai:
     base_url: "https://api.openai.com/v1"
     key_env: [OPENAI_API_KEY, AI_API_KEY]
