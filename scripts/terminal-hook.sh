@@ -6,9 +6,20 @@
 cd "$(dirname "$0")/.." || exit 0
 export PATH="$HOME/.local/bin:$HOME/.hermes/bin:$PATH"
 mkdir -p .run logs
-if command -v flock >/dev/null 2>&1 && ! flock -n .run/autostart.lock true; then
-  echo "[..] Hermes auto-start still running: tail -f $PWD/logs/autostart.log"
-  exit 0
+# The first Codespace terminal usually opens while auto-start is still
+# installing. Previously we bailed out here, so Hermes never auto-launched.
+# Now: stream the setup log, wait for it to finish, then continue.
+lock_busy(){ command -v flock >/dev/null 2>&1 && ! flock -n .run/autostart.lock true; }
+if lock_busy; then
+  if [ -t 1 ]; then
+    echo "== Hermes setup still running, live log below (Ctrl+C to skip waiting) =="
+    tail -n 30 -f logs/autostart.log & TP=$!
+    trap 'kill $TP 2>/dev/null; exit 0' INT
+    for _ in $(seq 1 600); do lock_busy || break; sleep 2; done
+    kill "$TP" 2>/dev/null; trap - INT
+  else
+    exit 0
+  fi
 fi
 if bash scripts/start-hermes.sh status | grep -q 'Task Manager: RUNNING'; then
   bash scripts/start-hermes.sh status

@@ -179,6 +179,8 @@ save_secret(){ # save_secret KEY VALUE — project config + Hermes CLI config
   write_env "$HERMES_ENV" "$1" "$2"
   # note: must not end in a failing `&&` chain — this runs under `set -e`
   if [ "$1" = GEMINI_API_KEY ]; then write_env "$HERMES_ENV" GOOGLE_API_KEY "$2"; fi
+  # Hermes' native NVIDIA provider reads NVIDIA_API_KEY (not NVIDIA_NIM_API_KEY)
+  if [ "$1" = NVIDIA_NIM_API_KEY ]; then write_env "$HERMES_ENV" NVIDIA_API_KEY "$2"; fi
   return 0
 }
 
@@ -214,6 +216,7 @@ HERMES_BASE_URL:HERMES_BASE_URL
 HERMES_FALLBACK_PROVIDER:HERMES_FALLBACK_PROVIDER
 HERMES_FALLBACK_MODEL:HERMES_FALLBACK_MODEL
 HERMES_REASONING_EFFORT:HERMES_REASONING_EFFORT
+HERMES_CONTEXT_LENGTH:HERMES_CONTEXT_LENGTH
 HERMES_FORCE_MODEL:HERMES_FORCE_MODEL
 TARGET_URL:TARGET_URL
 ALLOWED_DOMAINS:ALLOWED_DOMAINS
@@ -308,7 +311,35 @@ fi
 # --- Hermes CLI/gateway model: ~/.hermes/config.yaml ----------------------------
 # This is what the `hermes` command actually reads. Without it Hermes launches
 # on OpenRouter, which is exactly the bug this block fixes.
+# NVIDIA_API_KEY must be in this process env too (configure-hermes checks it)
+[ -n "${NVIDIA_NIM_API_KEY:-}" ] && export NVIDIA_API_KEY="${NVIDIA_API_KEY:-$NVIDIA_NIM_API_KEY}"
 python3 scripts/configure-hermes.py || warn "could not write ~/.hermes/config.yaml"
+
+# --- Hermes plugin: "!!!!" guard + screenshot-to-Telegram hint -----------------
+PLUG_SRC="$REPO_ROOT/hermes-plugins/codespace-guard"
+PLUG_DST="$HOME/.hermes/plugins/codespace-guard"
+if [ -d "$PLUG_SRC" ]; then
+  mkdir -p "$PLUG_DST" && cp -f "$PLUG_SRC"/* "$PLUG_DST"/
+  if have hermes; then
+    if timeout 60 hermes plugins enable codespace-guard </dev/null >/dev/null 2>&1; then
+      ok "Hermes plugin codespace-guard enabled (blocks '!!!!' replies, screenshot hint)"
+    else
+      warn "could not enable plugin codespace-guard (run: hermes plugins enable codespace-guard)"
+    fi
+  fi
+fi
+
+# --- Hermes browser tools (needed for screenshots sent to Telegram) -------------
+if have hermes; then
+  if have agent-browser || [ -f "$HOME/.hermes/.codespace-browser-ok" ]; then
+    ok "Hermes browser tools present (screenshots -> Telegram photos)"
+  elif timeout 900 hermes pm install agent-browser </dev/null >/dev/null 2>&1; then
+    touch "$HOME/.hermes/.codespace-browser-ok"
+    ok "Hermes browser tools installed (agent-browser + Chromium)"
+  else
+    warn "Hermes browser tools install failed (retried next start; manual: hermes pm install agent-browser)"
+  fi
+fi
 
 # --- Telegram for the Hermes gateway (chat with Hermes directly) -----------------
 # Hermes' own gateway reads TELEGRAM_BOT_TOKEN + TELEGRAM_ALLOWED_USERS from

@@ -1,23 +1,31 @@
 #!/usr/bin/env python3
 """Writes the Hermes CLI/gateway model config (~/.hermes/config.yaml).
 
-WHY: the Hermes agent ignores OPENAI_BASE_URL for anything but its own
-`openai-api` provider and reads the model ONLY from ~/.hermes/config.yaml.
-With no `model:` block there it falls back to OpenRouter on launch. This
-script pins the default to NVIDIA NIM + moonshotai/kimi-k3 (or whatever the
-env says) without touching any other Hermes setting.
+WHY: Hermes reads the model ONLY from ~/.hermes/config.yaml. With no usable
+`model:` block it treats itself as "not configured" and falls back to its
+OpenRouter default / setup wizard on launch.
 
-Stays configurable later:
-  * env overrides (Codespaces secrets or config/.env):
-      HERMES_PROVIDER   nvidia_nim (default) | openrouter | custom | <any hermes provider slug>
-      HERMES_MODEL      default: moonshotai/kimi-k3
-      HERMES_BASE_URL   default: https://integrate.api.nvidia.com/v1 (for nvidia_nim)
-      HERMES_FALLBACK_PROVIDER / HERMES_FALLBACK_MODEL  optional (e.g. openrouter)
-      HERMES_REASONING_EFFORT  default: high
-      HERMES_CONTEXT_LENGTH    default: 131072
-  * if you change the model yourself (`hermes model`, /model, editing the
-    yaml) we detect it and leave it alone on the next VM start.
-    Force a reset with HERMES_FORCE_MODEL=1.
+Default written here = Hermes' NATIVE NVIDIA NIM provider:
+    model:
+      provider: nvidia                       # first-class provider in Hermes
+      default: moonshotai/kimi-k3
+      base_url: https://integrate.api.nvidia.com/v1
+The key is read by Hermes from NVIDIA_API_KEY in ~/.hermes/.env (bootstrap.sh
+copies your Codespaces secret there). The previous version used
+`provider: custom` + api_key "${NVIDIA_NIM_API_KEY}"; that relied on ${}
+expansion at load time and Hermes could treat the provider as having no
+credentials -> OpenRouter on first launch. Native provider = no such gap.
+
+Stays configurable later (Codespaces secrets or config/.env):
+    HERMES_PROVIDER   nvidia (default; aliases nvidia_nim/nim) | openrouter |
+                      custom | anthropic | gemini | <any Hermes provider slug>
+    HERMES_MODEL      default: moonshotai/kimi-k3 (for nvidia)
+    HERMES_BASE_URL   default: https://integrate.api.nvidia.com/v1 (for nvidia)
+    HERMES_FALLBACK_PROVIDER / HERMES_FALLBACK_MODEL   optional fallback
+    HERMES_REASONING_EFFORT   default: high
+    HERMES_CONTEXT_LENGTH     default: 131072
+Or just run `hermes model` / `/model` yourself: a manual change is detected
+and kept across VM restarts. HERMES_FORCE_MODEL=1 resets to the default.
 """
 import json, os, sys
 from pathlib import Path
@@ -28,61 +36,111 @@ CFG = HOME / "config.yaml"
 STAMP = HOME / ".codespace-model.json"   # what WE wrote last time
 
 NIM_URL = "https://integrate.api.nvidia.com/v1"
-KEY_ENV = {"nvidia_nim": "NVIDIA_NIM_API_KEY", "custom": "CUSTOM_API_KEY"}
+NIM_HOST = "integrate.api.nvidia.com"
+DEFAULT_MODEL = "moonshotai/kimi-k3"
+NVIDIA_ALIASES = ("nvidia", "nvidia_nim", "nvidia-nim", "nim", "build-nvidia")
+# provider -> env var that must hold its key before we switch to it
+KEY_ENV = {"nvidia": "NVIDIA_API_KEY", "custom": "CUSTOM_API_KEY",
+           "openrouter": "OPENROUTER_API_KEY"}
+AUX_TASKS = ("vision", "web_extract", "compression")
+
 
 def env(k, d=""):
     return (os.getenv(k) or d).strip()
 
+
 def desired():
-    prov = env("HERMES_PROVIDER", "nvidia_nim")
-    model = env("HERMES_MODEL", "moonshotai/kimi-k3" if prov == "nvidia_nim" else "")
-    block = {"default": model}
-    if prov in ("nvidia_nim", "nvidia", "nim"):
-        # NIM is OpenAI-compatible: use Hermes' first-class `custom` provider
-        block.update(provider="custom", base_url=env("HERMES_BASE_URL", NIM_URL),
-                     api_key="${NVIDIA_NIM_API_KEY}", key_env="NVIDIA_NIM_API_KEY",
+    prov = env("HERMES_PROVIDER", "nvidia").lower()
+    if prov in NVIDIA_ALIASES:
+        prov = "nvidia"
+    model = env("HERMES_MODEL", DEFAULT_MODEL if prov == "nvidia" else "")
+    block = {"provider": prov, "default": model}
+    if prov == "nvidia":
+        block.update(base_url=env("HERMES_BASE_URL", NIM_URL),
                      api_mode="chat_completions",
                      context_length=int(env("HERMES_CONTEXT_LENGTH", "131072")))
     elif prov == "custom":
-        block.update(provider="custom", base_url=env("HERMES_BASE_URL", env("CUSTOM_BASE_URL")),
-                     api_key="${CUSTOM_API_KEY}", key_env="CUSTOM_API_KEY",
-                     api_mode="chat_completions")
-    else:  # openrouter, anthropic, gemini, nous ... -> Hermes resolves them natively
-        block.update(provider=prov)
-        if env("HERMES_BASE_URL"): block["base_url"] = env("HERMES_BASE_URL")
+        block.update(base_url=env("HERMES_BASE_URL", env("CUSTOM_BASE_URL")),
+                     key_env="CUSTOM_API_KEY", api_mode="chat_completions")
+    elif env("HERMES_BASE_URL"):
+        block["base_url"] = env("HERMES_BASE_URL")
     return prov, block
+
+
+def ident(m):
+    if isinstance(m, dict):
+        return (str(m.get("provider") or ""), str(m.get("default") or m.get("model") or ""),
+                str(m.get("base_url") or ""))
+    return ("", str(m or ""), "")
+
+
+def unconfigured(m):
+    """Empty sentinel / 'auto' / no model: Hermes would pick OpenRouter itself."""
+    p, d, _ = ident(m)
+    return not d or p in ("", "auto")
+
+
+def written_by_us(m, last):
+    """Our block, possibly normalised/migrated by Hermes (old custom variant too)."""
+    p, d, u = ident(m)
+    if last is not None and (p, d, u) == ident(last):
+        return True
+    return d == DEFAULT_MODEL and (p in ("nvidia", "custom") or NIM_HOST in u)
+
 
 def main():
     HOME.mkdir(parents=True, exist_ok=True)
     data = {}
     if CFG.exists():
-        try: data = yaml.safe_load(CFG.read_text()) or {}
+        try:
+            data = yaml.safe_load(CFG.read_text()) or {}
         except Exception as e:
-            print(f"[WARN] {CFG} unreadable ({e}); leaving it alone"); return 0
+            print(f"[WARN] {CFG} unreadable ({e}); leaving it alone")
+            return 0
+    if not isinstance(data, dict):
+        data = {}
     cur = data.get("model")
-    last = json.loads(STAMP.read_text()) if STAMP.exists() else None
-    force = env("HERMES_FORCE_MODEL") in ("1", "true", "yes")
-    # first run: take over (fixes the OpenRouter default). Later runs: only
-    # rewrite if the block is still exactly what we wrote last time.
-    # compare only the identity fields: Hermes may normalise/migrate the rest
-    ident = lambda m: (m.get("provider"), m.get("default") or m.get("model"), m.get("base_url") or "") \
-        if isinstance(m, dict) else (None, m, "")
-    user_changed = last is not None and ident(cur) != ident(last)
-    if user_changed and not force:
-        c = cur if isinstance(cur, dict) else {"default": cur}
-        print(f"[ OK ] Hermes model kept (changed by you): {c.get('provider')} / {c.get('default')}"
-              "  (set HERMES_FORCE_MODEL=1 to reset to the default)")
+    try:
+        last = json.loads(STAMP.read_text()) if STAMP.exists() else None
+    except Exception:
+        last = None
+    force = env("HERMES_FORCE_MODEL").lower() in ("1", "true", "yes")
+    explicit = bool(env("HERMES_PROVIDER") or env("HERMES_MODEL"))
+    prov, block = desired()
+
+    take_over = (force or last is None or unconfigured(cur) or written_by_us(cur, last)
+                 or (explicit and ident(block)[:2] != ident(cur)[:2]))
+    if not take_over:
+        p, d, _ = ident(cur)
+        print(f"[ OK ] Hermes model kept (you changed it): {p or '?'} / {d}"
+              "  (HERMES_FORCE_MODEL=1 resets to NVIDIA NIM / kimi-k3)")
         return 0
 
-    prov, block = desired()
-    if prov in KEY_ENV and not os.getenv(KEY_ENV[prov]):
-        print(f"[WARN] {KEY_ENV[prov]} not set, Hermes model not configured yet"); return 0
+    need = KEY_ENV.get(prov)
+    if need and not os.getenv(need):
+        print(f"[WARN] {need} not set: Hermes model not configured yet "
+              "(add the Codespaces secret, it is picked up on the next start)")
+        return 0
     if not block.get("default"):
-        print("[WARN] HERMES_MODEL empty, Hermes model not configured"); return 0
+        print("[WARN] HERMES_MODEL empty: Hermes model not configured")
+        return 0
+
     data["model"] = block
-    data.setdefault("agent", {})
-    if isinstance(data["agent"], dict):
-        data["agent"]["reasoning_effort"] = env("HERMES_REASONING_EFFORT", "high")
+    agent = data.setdefault("agent", {})
+    if isinstance(agent, dict):
+        agent["reasoning_effort"] = env("HERMES_REASONING_EFFORT", "high")
+
+    # side tasks (vision, page extraction, compression) follow the main model
+    # instead of Hermes' OpenRouter/Gemini-Flash fallback
+    aux = data.get("auxiliary")
+    if not isinstance(aux, dict):
+        aux = data["auxiliary"] = {}
+    for t in AUX_TASKS:
+        a = aux.get(t)
+        if not isinstance(a, dict):
+            a = aux[t] = {}
+        if str(a.get("provider") or "auto") in ("auto", "openrouter") and not a.get("model"):
+            a["provider"] = "main"
 
     fb_p, fb_m = env("HERMES_FALLBACK_PROVIDER"), env("HERMES_FALLBACK_MODEL")
     if fb_p and fb_m:
@@ -96,6 +154,7 @@ def main():
     print(f"[ OK ] Hermes default model: {prov} / {block['default']}"
           + (f" via {block.get('base_url')}" if block.get("base_url") else ""))
     return 0
+
 
 if __name__ == "__main__":
     sys.exit(main())

@@ -53,10 +53,16 @@ start_one(){ # start_one NAME MODULE OUTLOG
   return 1
 }
 
+cfg_sig(){ cat "$HOME/.hermes/config.yaml" "$HOME/.hermes/.env" 2>/dev/null | md5sum 2>/dev/null | cut -c1-32; }
+
 start_gateway(){ # Hermes' own Telegram gateway: chat with Hermes from Telegram
-  local pidf="$RUN_DIR/gateway.pid"
+  local pidf="$RUN_DIR/gateway.pid" sigf="$RUN_DIR/gateway.sig"
   if pid_alive "$pidf" "gateway"; then
-    echo "[..] hermes gateway already running (pid $(cat "$pidf"))"; return 0
+    if [ "$(cat "$sigf" 2>/dev/null)" = "$(cfg_sig)" ]; then
+      echo "[..] hermes gateway already running (pid $(cat "$pidf"))"; return 0
+    fi
+    echo "[..] Hermes config changed, restarting the gateway so Telegram uses it"
+    stop_one gateway gateway >/dev/null
   fi
   if ! command -v hermes >/dev/null 2>&1; then
     echo "[WARN] hermes not installed yet, Telegram chat starts on the next VM start"; return 1
@@ -69,6 +75,7 @@ start_gateway(){ # Hermes' own Telegram gateway: chat with Hermes from Telegram
     nohup hermes gateway run </dev/null >>logs/gateway.out 2>&1 9>&- &
   fi
   echo $! >"$pidf"
+  cfg_sig >"$sigf"
   sleep 4
   if pid_alive "$pidf" "gateway"; then
     echo "[OK] hermes gateway started (pid $(cat "$pidf"); Telegram chat -> Hermes; log logs/gateway.out)"

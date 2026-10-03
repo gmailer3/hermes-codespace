@@ -15,7 +15,7 @@
     "PYTHONPATH": "${containerWorkspaceFolder}/src"
   },
   "secrets": {
-    "NVIDIA_NIM_API_KEY": { "description": "PRIMARY: NVIDIA NIM key (build.nvidia.com -> Get API Key). Auto-configures moonshotai/kimi-k3 (default for Hermes + runner) via https://integrate.api.nvidia.com/v1. Aliases also detected: NVIDIA_API_KEY, NIM_API_KEY." },
+    "NVIDIA_NIM_API_KEY": { "description": "PRIMARY: NVIDIA NIM key (build.nvidia.com -> Get API Key). Auto-configures Hermes' native nvidia provider with moonshotai/kimi-k3 via https://integrate.api.nvidia.com/v1. A secret named NVIDIA_API_KEY or NIM_API_KEY works too." },
     "TELEGRAM_BOT_TOKEN": { "description": "Telegram bot token from @BotFather. Starts the Hermes gateway automatically so you chat with Hermes on Telegram." },
     "TELEGRAM_CHAT_ID": { "description": "Chat id(s) allowed to command the bot, comma-separated (alias TELEGRAM_CLIENT_ID also works). Send /start to the bot to learn your id." },
     "GEMINI_API_KEY": { "description": "Optional fallback provider: Google AI Studio key (aistudio.google.com/apikey)" },
