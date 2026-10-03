@@ -9,9 +9,11 @@
 #    3. Detects API keys / Telegram credentials from GitHub Codespaces secrets
 #       (injected as environment variables) and writes them to config/.env
 #       (project, gitignored) and ~/.hermes/.env (Hermes CLI, chmod 600)
-#    4. Auto-configures the model: NVIDIA NIM + z-ai/glm-5.3 has top priority;
-#       the first provider with a detected key becomes active, the second one
-#       becomes the fallback. There is NO model setup step to answer.
+#    4. Auto-configures the model: NVIDIA NIM + moonshotai/kimi-k3 is the
+#       default for BOTH the task runner and the Hermes CLI/gateway
+#       (~/.hermes/config.yaml). OpenRouter & co. are optional extras, never
+#       the default. Override later with HERMES_PROVIDER / HERMES_MODEL or
+#       `hermes model` (your manual choice is kept across restarts).
 #    5. Telegram is configured purely from TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID
 #       secrets — never prompted for.
 #    6. Prints a summary; with --launch (or on an interactive terminal) it also
@@ -177,6 +179,8 @@ save_secret(){ # save_secret KEY VALUE — project config + Hermes CLI config
   write_env "$HERMES_ENV" "$1" "$2"
   # note: must not end in a failing `&&` chain — this runs under `set -e`
   if [ "$1" = GEMINI_API_KEY ]; then write_env "$HERMES_ENV" GOOGLE_API_KEY "$2"; fi
+  # Hermes' native NVIDIA provider reads NVIDIA_API_KEY (not NVIDIA_NIM_API_KEY)
+  if [ "$1" = NVIDIA_NIM_API_KEY ]; then write_env "$HERMES_ENV" NVIDIA_API_KEY "$2"; fi
   return 0
 }
 
@@ -204,6 +208,16 @@ WEBSITE_CREDENTIALS:WEBSITE_CREDENTIALS
 TELEGRAM_BOT_TOKEN:TELEGRAM_BOT_TOKEN
 TELEGRAM_CLIENT_ID:TELEGRAM_CHAT_ID
 TELEGRAM_CHAT_ID:TELEGRAM_CHAT_ID
+TELEGRAM_ALLOWED_USERS:TELEGRAM_CHAT_ID
+TELEGRAM_MODE:TELEGRAM_MODE
+HERMES_PROVIDER:HERMES_PROVIDER
+HERMES_MODEL:HERMES_MODEL
+HERMES_BASE_URL:HERMES_BASE_URL
+HERMES_FALLBACK_PROVIDER:HERMES_FALLBACK_PROVIDER
+HERMES_FALLBACK_MODEL:HERMES_FALLBACK_MODEL
+HERMES_REASONING_EFFORT:HERMES_REASONING_EFFORT
+HERMES_CONTEXT_LENGTH:HERMES_CONTEXT_LENGTH
+HERMES_FORCE_MODEL:HERMES_FORCE_MODEL
 TARGET_URL:TARGET_URL
 ALLOWED_DOMAINS:ALLOWED_DOMAINS
 "
@@ -224,7 +238,7 @@ if [ "$FOUND" = 0 ]; then
 fi
 
 # --- 6/7 AI provider + model (automatic — the model setup is SKIPPED) ---------
-# Priority order: NVIDIA NIM (z-ai/glm-5.3) first, then the rest. The active
+# Priority order: NVIDIA NIM (moonshotai/kimi-k3) first, then the rest. The active
 # provider is the configured one if it has a key, otherwise the first provider
 # in priority order that does. Model names are auto-filled; nothing is asked.
 step "6/7 AI provider + model (auto-configured)"
@@ -240,7 +254,7 @@ has_key(){ case "$1" in
   *) return 1 ;;
 esac }
 DEFAULT_MODEL(){ case "$1" in
-  nvidia_nim) echo "z-ai/glm-5.3" ;;
+  nvidia_nim) echo "moonshotai/kimi-k3" ;;
   google) echo "gemini-3-flash-preview" ;;
   openrouter) echo "google/gemini-3-flash-preview" ;;
   openai) echo "gpt-4o-mini" ;;
@@ -252,6 +266,8 @@ ORDER="nvidia_nim google openrouter openai anthropic glm custom"
 
 ACTIVE=""
 CUR="${MODEL_PROVIDER:-}"
+# migrate configs created by older versions of this repo (old GLM default)
+if [ "${MODEL_NAME:-}" = "z-ai/glm-5.3" ]; then MODEL_NAME=""; fi
 if [ -n "$CUR" ] && has_key "$CUR"; then
   ACTIVE="$CUR"
 else
@@ -274,33 +290,79 @@ if [ -n "$ACTIVE" ]; then
   sed -i.bak "s#^FALLBACK_MODEL=.*#FALLBACK_MODEL=$(DEFAULT_MODEL "$FALL")#" "$CFG" || true; rm -f "$CFG.bak"
   write_env "$HERMES_ENV" MODEL_PROVIDER "$ACTIVE"
   write_env "$HERMES_ENV" MODEL_NAME "$MN"
-  # every provider here is used as an OpenAI-compatible endpoint: export the
-  # standard OPENAI_* variables for the ACTIVE provider so the Hermes CLI (and
-  # any OpenAI-compatible tool) is configured automatically — the model setup
-  # wizard is entirely skipped.
-  BU="" ; KEY=""
-  case "$ACTIVE" in
-    nvidia_nim) BU="https://integrate.api.nvidia.com/v1";                 KEY="${NVIDIA_NIM_API_KEY:-}" ;;
-    google)     BU="https://generativelanguage.googleapis.com/v1beta/openai"; KEY="${GEMINI_API_KEY:-}" ;;
-    openrouter) BU="https://openrouter.ai/api/v1";                        KEY="${OPENROUTER_API_KEY:-}" ;;
-    openai)     BU="https://api.openai.com/v1";                           KEY="${OPENAI_API_KEY:-${AI_API_KEY:-}}" ;;
-    anthropic)  BU="https://api.anthropic.com/v1";                        KEY="${ANTHROPIC_API_KEY:-${AI_API_KEY:-}}" ;;
-    glm)        BU="https://open.bigmodel.cn/api/paas/v4";                KEY="${GLM_API_KEY:-${AI_API_KEY:-}}" ;;
-    custom)     BU="${CUSTOM_BASE_URL:-}";                                KEY="${CUSTOM_API_KEY:-${AI_API_KEY:-}}" ;;
-  esac
-  if [ -n "$BU" ] && [ -n "$KEY" ]; then
-    write_env "$HERMES_ENV" OPENAI_BASE_URL "$BU"
-    write_env "$HERMES_ENV" OPENAI_API_BASE "$BU"
-    write_env "$HERMES_ENV" OPENAI_API_KEY "$KEY"
+  # NOTE: older versions exported OPENAI_BASE_URL/OPENAI_API_KEY here. Hermes
+  # ignores those for NIM (and an OPENAI_API_KEY holding the NVIDIA key only
+  # confuses its provider auto-detection), so remove any stale copies.
+  for k in OPENAI_BASE_URL OPENAI_API_BASE; do
+    sed -i.bak "/^$k=/d" "$HERMES_ENV" 2>/dev/null || true; rm -f "$HERMES_ENV.bak"
+  done
+  if ! grep -q '^OPENAI_API_KEY=' "$CFG"; then   # no real OpenAI secret -> drop the stale copy
+    sed -i.bak "/^OPENAI_API_KEY=/d" "$HERMES_ENV" 2>/dev/null || true; rm -f "$HERMES_ENV.bak"
   fi
   set -a; . "$CFG"; set +a
   [ "$ACTIVE" = "$CUR" ] || warn "configured provider '${CUR:-none}' has no key — switched automatically"
   ok "active provider: $ACTIVE / ${MN:-<provider default>}${FALL:+ (fallback: $FALL / $(DEFAULT_MODEL "$FALL"))}"
-  [ "$ACTIVE" = nvidia_nim ] && ok "NVIDIA NIM endpoint: https://integrate.api.nvidia.com/v1 (model z-ai/glm-5.3)"
+  [ "$ACTIVE" = nvidia_nim ] && ok "NVIDIA NIM endpoint: https://integrate.api.nvidia.com/v1 (model $MN)"
 else
   warn "no AI provider key found yet — services start once a key secret exists"
   warn "(add e.g. NVIDIA_NIM_API_KEY under repo -> Settings -> Secrets -> Codespaces)"
 fi
+
+# --- Hermes CLI/gateway model: ~/.hermes/config.yaml ----------------------------
+# This is what the `hermes` command actually reads. Without it Hermes launches
+# on OpenRouter, which is exactly the bug this block fixes.
+# NVIDIA_API_KEY must be in this process env too (configure-hermes checks it)
+[ -n "${NVIDIA_NIM_API_KEY:-}" ] && export NVIDIA_API_KEY="${NVIDIA_API_KEY:-$NVIDIA_NIM_API_KEY}"
+python3 scripts/configure-hermes.py || warn "could not write ~/.hermes/config.yaml"
+
+# --- Hermes plugin: "!!!!" guard + screenshot-to-Telegram hint -----------------
+PLUG_SRC="$REPO_ROOT/hermes-plugins/codespace-guard"
+PLUG_DST="$HOME/.hermes/plugins/codespace-guard"
+if [ -d "$PLUG_SRC" ]; then
+  mkdir -p "$PLUG_DST" && cp -f "$PLUG_SRC"/* "$PLUG_DST"/
+  if have hermes; then
+    if timeout 60 hermes plugins enable codespace-guard </dev/null >/dev/null 2>&1; then
+      ok "Hermes plugin codespace-guard enabled (blocks '!!!!' replies, screenshot hint)"
+    else
+      warn "could not enable plugin codespace-guard (run: hermes plugins enable codespace-guard)"
+    fi
+  fi
+fi
+
+# --- Hermes browser tools (needed for screenshots sent to Telegram) -------------
+if have hermes; then
+  if have agent-browser || [ -f "$HOME/.hermes/.codespace-browser-ok" ]; then
+    ok "Hermes browser tools present (screenshots -> Telegram photos)"
+  elif timeout 900 hermes pm install agent-browser </dev/null >/dev/null 2>&1; then
+    touch "$HOME/.hermes/.codespace-browser-ok"
+    ok "Hermes browser tools installed (agent-browser + Chromium)"
+  else
+    warn "Hermes browser tools install failed (retried next start; manual: hermes pm install agent-browser)"
+  fi
+fi
+
+# --- Telegram for the Hermes gateway (chat with Hermes directly) -----------------
+# Hermes' own gateway reads TELEGRAM_BOT_TOKEN + TELEGRAM_ALLOWED_USERS from
+# ~/.hermes/.env. For private chats the chat id == your user id.
+# Negative ids are groups -> TELEGRAM_GROUP_ALLOWED_CHATS; @names are skipped
+# (the gateway needs numeric ids).
+if [ -n "${TELEGRAM_CHAT_ID:-}" ]; then
+  TG_USERS=""; TG_GROUPS=""
+  for id in $(printf '%s' "$TELEGRAM_CHAT_ID" | tr ',' ' '); do
+    case "$id" in
+      -[0-9]*) TG_GROUPS="${TG_GROUPS:+$TG_GROUPS,}$id" ;;
+      [0-9]*)  TG_USERS="${TG_USERS:+$TG_USERS,}$id" ;;
+      *) warn "Telegram id '$id' is not numeric, Hermes gateway ignores it (send /start to @userinfobot for your id)" ;;
+    esac
+  done
+  [ -n "$TG_USERS" ]  && write_env "$HERMES_ENV" TELEGRAM_ALLOWED_USERS "$TG_USERS"
+  [ -n "$TG_GROUPS" ] && write_env "$HERMES_ENV" TELEGRAM_GROUP_ALLOWED_CHATS "$TG_GROUPS"
+  ok "Telegram allow-list for Hermes: ${TG_USERS:-none}${TG_GROUPS:+ (groups: $TG_GROUPS)}"
+else
+  [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && warn "TELEGRAM_CHAT_ID not set: Hermes gateway will use DM pairing (first user to DM the bot claims it)"
+fi
+TELEGRAM_MODE="${TELEGRAM_MODE:-hermes}"
+write_env "$CFG" TELEGRAM_MODE "$TELEGRAM_MODE"
 
 # --- terminal hook: every new Codespace terminal shows status + self-heals -----
 HOOK_LINE="[ -n \"\${PS1:-}\" ] && [ -f '$REPO_ROOT/scripts/terminal-hook.sh' ] && bash '$REPO_ROOT/scripts/terminal-hook.sh'"
@@ -335,7 +397,7 @@ for k in NVIDIA_NIM_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY OPENAI_API_KEY \
 done
 if [ -n "$KEYS" ]; then ok "API keys present:$KEYS"; else warn "no AI API keys yet"; fi
 
-if [ -n "${TELEGRAM_BOT_TOKEN:-}" ]; then ok "Telegram bot token set (from secrets — bot auto-starts)"
+if [ -n "${TELEGRAM_BOT_TOKEN:-}" ]; then ok "Telegram bot token set (mode: ${TELEGRAM_MODE:-hermes}; hermes = chat with Hermes, control = task bot)"
 else echo "[ -- ] TELEGRAM_BOT_TOKEN not set (Telegram control is optional)"; fi
 if [ -n "${TELEGRAM_CHAT_ID:-}" ]; then ok "TELEGRAM_CHAT_ID set (${TELEGRAM_CHAT_ID})"
 else warn "TELEGRAM_CHAT_ID not set — the bot will only reveal chat ids via /start"; fi

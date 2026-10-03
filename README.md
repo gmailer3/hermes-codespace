@@ -8,7 +8,7 @@ requirements.
 Codespace VM starts, `scripts/auto-start.sh` runs `bootstrap.sh`, which checks
 whether Hermes is installed (installs it if not), installs Python deps +
 Chromium, detects your secrets (NVIDIA API key, Telegram bot token + chat id),
-auto-configures the model (**NVIDIA NIM / GLM-5.3**), and launches the task
+auto-configures the model (**NVIDIA NIM / Kimi K3**), and launches the task
 runner + Telegram bot. There are **no setup menus and nothing is ever asked** —
 you never run a command.
 
@@ -21,7 +21,7 @@ you never run a command.
 
    | Secret | What it is | Where to get it |
    |---|---|---|
-   | `NVIDIA_NIM_API_KEY` | **Primary AI — NVIDIA NIM, auto-configures GLM-5.3** (`https://integrate.api.nvidia.com/v1`, model `z-ai/glm-5.3`). Aliases `NVIDIA_API_KEY` / `NIM_API_KEY` are also detected. | build.nvidia.com → Get API Key |
+   | `NVIDIA_NIM_API_KEY` | **Primary AI — NVIDIA NIM, auto-configures Kimi K3** (`https://integrate.api.nvidia.com/v1`, model `moonshotai/kimi-k3`). Aliases `NVIDIA_API_KEY` / `NIM_API_KEY` are also detected. | build.nvidia.com → Get API Key |
    | `TELEGRAM_BOT_TOKEN` | Enables the Telegram control bot — taken straight from secrets, **no setup questions** | @BotFather |
    | `TELEGRAM_CHAT_ID` | Chat id(s) allowed to command the bot (alias `TELEGRAM_CLIENT_ID` also works) | send `/start` to your bot once |
    | `GEMINI_API_KEY` | optional fallback provider (Google Gemini) | aistudio.google.com/apikey |
@@ -46,7 +46,7 @@ Codespace start
        │    ├─ Hermes installed?  no → install it (auto-retried each start)
        │    ├─ Python deps + Chromium present?  no → install
        │    ├─ detect Codespaces secrets → config/.env + ~/.hermes/.env (chmod 600)
-       │    ├─ auto-configure model: NVIDIA NIM + z-ai/glm-5.3 (top priority;
+       │    ├─ auto-configure model: NVIDIA NIM + moonshotai/kimi-k3 (top priority;
        │    │   first provider with a key wins, second becomes fallback)
        │    └─ Telegram configured from secrets only — never asked
        └─ scripts/start-hermes.sh start
@@ -62,14 +62,14 @@ Startup transcript: `logs/autostart.log`. Health: `bash scripts/health-check.sh`
 Active provider = `MODEL_PROVIDER` in `config/.env`; `FALLBACK_PROVIDER` is
 used automatically if the primary fails. `bootstrap.sh` picks them on every
 start from the keys present — **NVIDIA NIM has top priority and ships as the
-default with `z-ai/glm-5.3`**. No model setup step exists; the standard
+default with `moonshotai/kimi-k3`**. No model setup step exists; the standard
 OpenAI-compatible variables (`OPENAI_BASE_URL`, `OPENAI_API_KEY`, `MODEL_NAME`)
 are also written to `~/.hermes/.env`, so the Hermes CLI's own model setup is
 skipped entirely too.
 
 | Provider id | Key env var(s) | Example `MODEL_NAME` |
 |---|---|---|
-| `nvidia_nim` | `NVIDIA_NIM_API_KEY` (aliases `NVIDIA_API_KEY`, `NIM_API_KEY`) | `z-ai/glm-5.3` (default), `meta/llama-3.3-70b-instruct` |
+| `nvidia_nim` | `NVIDIA_NIM_API_KEY` (aliases `NVIDIA_API_KEY`, `NIM_API_KEY`) | `moonshotai/kimi-k3` (default), `meta/llama-3.3-70b-instruct` |
 | `google` | `GEMINI_API_KEY` | `gemini-3-flash-preview` |
 | `openrouter` | `OPENROUTER_API_KEY` | `google/gemini-3-flash-preview`, `anthropic/claude-sonnet-4.5` |
 | `openai` | `OPENAI_API_KEY` / `AI_API_KEY` | `gpt-4o-mini` |
@@ -113,7 +113,7 @@ bash bootstrap.sh
 ```
 
 Idempotent and fully automatic: installs **Hermes first** if missing → Python
-deps + Chromium → detects secrets → auto-configures the model (NVIDIA/GLM-5.3
+deps + Chromium → detects secrets → auto-configures the model (NVIDIA/Kimi K3
 first) and Telegram → validates and prints a summary. Add `--launch` to also
 start the services immediately (automatic when run on an interactive terminal).
 
@@ -149,3 +149,38 @@ curl -fsSL https://raw.githubusercontent.com/USER/REPO/main/bootstrap.sh \
 `~/.local/bin`). If the installer moves, override `HERMES_INSTALL_URL`. A
 failed install never blocks model/Telegram setup — it is retried automatically
 on every VM start.
+
+## Default model: NVIDIA NIM + Kimi K3 (and how to switch later)
+
+On every start `bootstrap.sh` runs `scripts/configure-hermes.py`, which writes the
+`model:` block of `~/.hermes/config.yaml` (the file the `hermes` command actually
+reads; without it Hermes launches on OpenRouter):
+
+```yaml
+model:
+  provider: custom
+  base_url: https://integrate.api.nvidia.com/v1
+  default: moonshotai/kimi-k3
+  api_key: ${NVIDIA_NIM_API_KEY}   # from the NVIDIA_API_KEY / NVIDIA_NIM_API_KEY secret
+```
+
+OpenRouter (or anything else) is optional and never the default. Switch any time:
+
+| How | Effect |
+|---|---|
+| `hermes model` or `/model` inside Hermes | kept across restarts (bootstrap sees you changed it and leaves it alone) |
+| Codespaces secrets `HERMES_PROVIDER` / `HERMES_MODEL` (e.g. `openrouter` / `anthropic/claude-sonnet-4.5`) | applied on next start |
+| `HERMES_FALLBACK_PROVIDER` + `HERMES_FALLBACK_MODEL` | adds a Hermes fallback (e.g. OpenRouter) |
+| `HERMES_FORCE_MODEL=1` | resets back to NIM / Kimi K3 |
+
+## Telegram: chat with Hermes
+
+`TELEGRAM_MODE=hermes` (default) runs Hermes' own gateway (`hermes gateway run`):
+every message you send the bot goes straight to Hermes. `TELEGRAM_CHAT_ID`
+(alias `TELEGRAM_CLIENT_ID`) becomes `TELEGRAM_ALLOWED_USERS` (negative ids =
+groups). `TELEGRAM_MODE=control` switches back to the old task-control bot
+(`/status`, `/run` ...). Only one runs at a time: two pollers on one token
+make Telegram return 409 and both break.
+
+The first terminal after each Codespace boot drops straight into `hermes`
+(opt out with `HERMES_NO_AUTOCHAT=1`).
