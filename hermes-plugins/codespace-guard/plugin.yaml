@@ -8,3 +8,5 @@ description: >
 provides_hooks:
   - transform_llm_output
   - pre_llm_call
+  - transform_tool_result
+  - pre_api_request

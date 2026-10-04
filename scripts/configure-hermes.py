@@ -8,7 +8,7 @@ OpenRouter default / setup wizard on launch.
 Default written here = Hermes' NATIVE NVIDIA NIM provider:
     model:
       provider: nvidia                       # first-class provider in Hermes
-      default: moonshotai/kimi-k3
+      default: z-ai/glm-5.3
       base_url: https://integrate.api.nvidia.com/v1
 The key is read by Hermes from NVIDIA_API_KEY in ~/.hermes/.env (bootstrap.sh
 copies your Codespaces secret there). The previous version used
@@ -19,11 +19,14 @@ credentials -> OpenRouter on first launch. Native provider = no such gap.
 Stays configurable later (Codespaces secrets or config/.env):
     HERMES_PROVIDER   nvidia (default; aliases nvidia_nim/nim) | openrouter |
                       custom | anthropic | gemini | <any Hermes provider slug>
-    HERMES_MODEL      default: moonshotai/kimi-k3 (for nvidia)
+    HERMES_MODEL      default: z-ai/glm-5.3 (for nvidia)
     HERMES_BASE_URL   default: https://integrate.api.nvidia.com/v1 (for nvidia)
     HERMES_FALLBACK_PROVIDER / HERMES_FALLBACK_MODEL   optional fallback
     HERMES_REASONING_EFFORT   default: high
     HERMES_CONTEXT_LENGTH     default: 131072
+    HERMES_IMAGE_MODE         default: text (images described, not embedded)
+    HERMES_VISION_MODEL       default: same as HERMES_MODEL (screenshot describer)
+    HERMES_SUPPORTS_VISION    default: false (see comment in desired())
 Or just run `hermes model` / `/model` yourself: a manual change is detected
 and kept across VM restarts. HERMES_FORCE_MODEL=1 resets to the default.
 """
@@ -37,7 +40,9 @@ STAMP = HOME / ".codespace-model.json"   # what WE wrote last time
 
 NIM_URL = "https://integrate.api.nvidia.com/v1"
 NIM_HOST = "integrate.api.nvidia.com"
-DEFAULT_MODEL = "moonshotai/kimi-k3"
+DEFAULT_MODEL = "z-ai/glm-5.3"
+# models this script has written as default before (safe to replace)
+OUR_MODELS = {DEFAULT_MODEL, "moonshotai/kimi-k3"}
 NVIDIA_ALIASES = ("nvidia", "nvidia_nim", "nvidia-nim", "nim", "build-nvidia")
 # provider -> env var that must hold its key before we switch to it
 KEY_ENV = {"nvidia": "NVIDIA_API_KEY", "custom": "CUSTOM_API_KEY",
@@ -58,7 +63,16 @@ def desired():
     if prov == "nvidia":
         block.update(base_url=env("HERMES_BASE_URL", NIM_URL),
                      api_mode="chat_completions",
-                     context_length=int(env("HERMES_CONTEXT_LENGTH", "131072")))
+                     context_length=int(env("HERMES_CONTEXT_LENGTH", "131072")),
+                     # NIM's Kimi accepts images in USER messages (your curl
+                     # works) but breaks on images inside TOOL results, which
+                     # is how Hermes feeds browser screenshots to a "vision"
+                     # main model -> "!!!!!!!!" on that turn and every turn
+                     # after (the image stays in history). So the main model
+                     # is declared text-only; screenshots are described by a
+                     # separate plain vision call (auxiliary.vision below).
+                     supports_vision=env("HERMES_SUPPORTS_VISION", "false").lower()
+                                     in ("1", "true", "yes"))
     elif prov == "custom":
         block.update(base_url=env("HERMES_BASE_URL", env("CUSTOM_BASE_URL")),
                      key_env="CUSTOM_API_KEY", api_mode="chat_completions")
@@ -85,7 +99,7 @@ def written_by_us(m, last):
     p, d, u = ident(m)
     if last is not None and (p, d, u) == ident(last):
         return True
-    return d == DEFAULT_MODEL and (p in ("nvidia", "custom") or NIM_HOST in u)
+    return d in OUR_MODELS and (p in ("nvidia", "custom") or NIM_HOST in u)
 
 
 def main():
@@ -113,7 +127,7 @@ def main():
     if not take_over:
         p, d, _ = ident(cur)
         print(f"[ OK ] Hermes model kept (you changed it): {p or '?'} / {d}"
-              "  (HERMES_FORCE_MODEL=1 resets to NVIDIA NIM / kimi-k3)")
+              "  (HERMES_FORCE_MODEL=1 resets to NVIDIA NIM / glm-5.3)")
         return 0
 
     need = KEY_ENV.get(prov)
@@ -130,8 +144,13 @@ def main():
     if isinstance(agent, dict):
         agent["reasoning_effort"] = env("HERMES_REASONING_EFFORT", "high")
 
-    # side tasks (vision, page extraction, compression) follow the main model
-    # instead of Hermes' OpenRouter/Gemini-Flash fallback
+    # images: never embed pixels in the main (tool-calling) request on NIM
+    if isinstance(agent, dict):
+        agent["image_input_mode"] = env("HERMES_IMAGE_MODE",
+                                        "text" if prov == "nvidia" else "auto")
+
+    # side tasks (page extraction, compression) follow the main model instead
+    # of Hermes' OpenRouter/Gemini-Flash fallback
     aux = data.get("auxiliary")
     if not isinstance(aux, dict):
         aux = data["auxiliary"] = {}
@@ -139,6 +158,16 @@ def main():
         a = aux.get(t)
         if not isinstance(a, dict):
             a = aux[t] = {}
+        ours = (str(a.get("provider") or "auto") in ("auto", "main", "openrouter", "nvidia", "custom")
+                and (not a.get("base_url") or NIM_HOST in str(a["base_url"])))
+        if t == "vision" and prov == "nvidia":
+            # dedicated describer: one plain user-role image request to NIM,
+            # exactly the shape of NVIDIA's own example (works)
+            if ours:
+                a.clear()
+                a["provider"] = env("HERMES_VISION_PROVIDER", "nvidia")
+                a["model"] = env("HERMES_VISION_MODEL", block["default"])
+            continue
         if str(a.get("provider") or "auto") in ("auto", "openrouter") and not a.get("model"):
             a["provider"] = "main"
 

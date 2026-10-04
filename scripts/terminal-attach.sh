@@ -27,7 +27,7 @@ else
 fi
 echo ""
 # Launch Hermes itself in this VS Code terminal (model from ~/.hermes/config.yaml,
-# i.e. NVIDIA NIM / kimi-k3 by default). Opt out with HERMES_NO_AUTOCHAT=1.
+# i.e. NVIDIA NIM / glm-5.3 by default). Opt out with HERMES_NO_AUTOCHAT=1.
 if [ -z "${HERMES_NO_AUTOCHAT:-}" ] && command -v hermes >/dev/null 2>&1 && [ -t 0 ]; then
   cat /proc/sys/kernel/random/boot_id > .run/autochat.boot 2>/dev/null || echo once > .run/autochat.boot
   echo "Launching Hermes (exit with /quit or Ctrl+D; services keep running)..."

@@ -37,3 +37,35 @@ installs the browser tools (`hermes pm install agent-browser`) and the plugin
 nudges the model to send MEDIA: when you ask for a screenshot.
 You only need a 2nd bot if you also want the old task "control" bot running
 at the same time (one token = one poller, otherwise Telegram 409).
+
+# Round 3: "!!!!" right after a screenshot (and on every turn after it)
+Cause: Kimi K3 is a vision model, so Hermes fed browser screenshots to it as
+an image INSIDE a tool result. NIM's Kimi handles images in user messages
+(NVIDIA's own example) but breaks on images in tool results -> "!!!!".
+The screenshot stays in the session history, so every later turn re-sends it
+and breaks too (that is the 3-minute wait + second "!!!!").
+Fix (configure-hermes.py, applied automatically):
+  model.supports_vision: false        main model never gets raw pixels
+  agent.image_input_mode: text        same for photos you send on Telegram
+  auxiliary.vision: nvidia / moonshotai/kimi-k3   a separate plain vision call
+                                      describes the screenshot in text
+The screenshot file is still sent to you as a photo (MEDIA:).
+Overrides: HERMES_IMAGE_MODE, HERMES_VISION_MODEL, HERMES_SUPPORTS_VISION.
+After updating: run `bash bootstrap.sh && bash scripts/start-hermes.sh restart`
+(or restart the codespace), then send /new in Telegram to drop the poisoned chat.
+
+# Round 4: "!!!!" on browsing tasks without screenshots (YouTube home page)
+- codespace-guard now caps browser/web tool results at 12k chars
+  (CODESPACE_GUARD_MAX_TOOL_CHARS) and strips invisible unicode. The YouTube
+  feed snapshot is 50-150k chars of video cards: the long noisy context where
+  NIM-hosted Kimi degenerates. Titles come first, so they survive the cap.
+- When a garbage reply happens, ~/.hermes/logs/codespace-guard.log now records
+  the request that caused it (message count, size, images, last tools, reasoning).
+- scripts/nim-diagnose.py: hits NIM directly with 6 request shapes and reports
+  which one returns "!!!!" (plain / reasoning / tools + page 12k / 90k).
+
+# Round 5: GLM 5.3 is the default (Kimi K3 was the source of the "!!!!")
+- Hermes + task runner default to z-ai/glm-5.3 on NVIDIA NIM.
+- Configs this repo wrote with Kimi are switched to GLM automatically; a model
+  you picked yourself with `hermes model` is still kept.
+- Override any time: HERMES_MODEL / HERMES_PROVIDER secrets, or `hermes model`.

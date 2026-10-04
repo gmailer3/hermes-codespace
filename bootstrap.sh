@@ -9,7 +9,7 @@
 #    3. Detects API keys / Telegram credentials from GitHub Codespaces secrets
 #       (injected as environment variables) and writes them to config/.env
 #       (project, gitignored) and ~/.hermes/.env (Hermes CLI, chmod 600)
-#    4. Auto-configures the model: NVIDIA NIM + moonshotai/kimi-k3 is the
+#    4. Auto-configures the model: NVIDIA NIM + z-ai/glm-5.3 is the
 #       default for BOTH the task runner and the Hermes CLI/gateway
 #       (~/.hermes/config.yaml). OpenRouter & co. are optional extras, never
 #       the default. Override later with HERMES_PROVIDER / HERMES_MODEL or
@@ -217,6 +217,10 @@ HERMES_FALLBACK_PROVIDER:HERMES_FALLBACK_PROVIDER
 HERMES_FALLBACK_MODEL:HERMES_FALLBACK_MODEL
 HERMES_REASONING_EFFORT:HERMES_REASONING_EFFORT
 HERMES_CONTEXT_LENGTH:HERMES_CONTEXT_LENGTH
+HERMES_IMAGE_MODE:HERMES_IMAGE_MODE
+HERMES_VISION_PROVIDER:HERMES_VISION_PROVIDER
+HERMES_VISION_MODEL:HERMES_VISION_MODEL
+HERMES_SUPPORTS_VISION:HERMES_SUPPORTS_VISION
 HERMES_FORCE_MODEL:HERMES_FORCE_MODEL
 TARGET_URL:TARGET_URL
 ALLOWED_DOMAINS:ALLOWED_DOMAINS
@@ -238,7 +242,7 @@ if [ "$FOUND" = 0 ]; then
 fi
 
 # --- 6/7 AI provider + model (automatic — the model setup is SKIPPED) ---------
-# Priority order: NVIDIA NIM (moonshotai/kimi-k3) first, then the rest. The active
+# Priority order: NVIDIA NIM (z-ai/glm-5.3) first, then the rest. The active
 # provider is the configured one if it has a key, otherwise the first provider
 # in priority order that does. Model names are auto-filled; nothing is asked.
 step "6/7 AI provider + model (auto-configured)"
@@ -254,7 +258,7 @@ has_key(){ case "$1" in
   *) return 1 ;;
 esac }
 DEFAULT_MODEL(){ case "$1" in
-  nvidia_nim) echo "moonshotai/kimi-k3" ;;
+  nvidia_nim) echo "z-ai/glm-5.3" ;;
   google) echo "gemini-3-flash-preview" ;;
   openrouter) echo "google/gemini-3-flash-preview" ;;
   openai) echo "gpt-4o-mini" ;;
@@ -266,8 +270,8 @@ ORDER="nvidia_nim google openrouter openai anthropic glm custom"
 
 ACTIVE=""
 CUR="${MODEL_PROVIDER:-}"
-# migrate configs created by older versions of this repo (old GLM default)
-if [ "${MODEL_NAME:-}" = "z-ai/glm-5.3" ]; then MODEL_NAME=""; fi
+# GLM 5.3 is the default again: move a runner auto-configured with Kimi back
+if [ "$CUR" = nvidia_nim ] && [ "${MODEL_NAME:-}" = "moonshotai/kimi-k3" ]; then MODEL_NAME=""; fi
 if [ -n "$CUR" ] && has_key "$CUR"; then
   ACTIVE="$CUR"
 else
