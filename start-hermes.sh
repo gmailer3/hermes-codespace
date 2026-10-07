@@ -53,6 +53,48 @@ start_one(){ # start_one NAME MODULE OUTLOG
   return 1
 }
 
+cfg_sig(){ cat "$HOME/.hermes/config.yaml" "$HOME/.hermes/.env" 2>/dev/null | md5sum 2>/dev/null | cut -c1-32; }
+
+start_gateway(){ # Hermes' own Telegram gateway: chat with Hermes from Telegram
+  local pidf="$RUN_DIR/gateway.pid" sigf="$RUN_DIR/gateway.sig"
+  if pid_alive "$pidf" "gateway"; then
+    if [ "$(cat "$sigf" 2>/dev/null)" = "$(cfg_sig)" ]; then
+      echo "[..] hermes gateway already running (pid $(cat "$pidf"))"; return 0
+    fi
+    echo "[..] Hermes config changed, restarting the gateway so Telegram uses it"
+    stop_one gateway gateway >/dev/null
+  fi
+  if ! command -v hermes >/dev/null 2>&1; then
+    echo "[WARN] hermes not installed yet, Telegram chat starts on the next VM start"; return 1
+  fi
+  rm -f "$pidf"
+  # foreground mode (no systemd in Codespaces); setsid detaches it from the hook
+  if command -v setsid >/dev/null 2>&1; then
+    setsid nohup hermes gateway run </dev/null >>logs/gateway.out 2>&1 9>&- &
+  else
+    nohup hermes gateway run </dev/null >>logs/gateway.out 2>&1 9>&- &
+  fi
+  echo $! >"$pidf"
+  cfg_sig >"$sigf"
+  sleep 4
+  if pid_alive "$pidf" "gateway"; then
+    echo "[OK] hermes gateway started (pid $(cat "$pidf"); Telegram chat -> Hermes; log logs/gateway.out)"
+    return 0
+  fi
+  echo "[FAIL] hermes gateway exited immediately, last log lines:"; tail -n 15 logs/gateway.out
+  return 1
+}
+
+start_telegram(){ # picks ONE poller per bot token (two pollers = Telegram 409 conflict)
+  [ -n "${TELEGRAM_BOT_TOKEN:-}" ] || { echo "[--] Telegram disabled (TELEGRAM_BOT_TOKEN not set)"; return 0; }
+  case "${TELEGRAM_MODE:-hermes}" in
+    hermes)  stop_one telegram telegram_bot.bot >/dev/null; start_gateway ;;
+    control) stop_one gateway gateway >/dev/null;           start_one telegram telegram_bot.bot telegram.out ;;
+    off)     echo "[--] Telegram disabled (TELEGRAM_MODE=off)" ;;
+    *)       echo "[WARN] unknown TELEGRAM_MODE='${TELEGRAM_MODE}' (hermes|control|off)"; return 1 ;;
+  esac
+}
+
 stop_one(){ # stop_one NAME MODULE
   local name=$1 mod=$2 pidf="$RUN_DIR/$1.pid" p
   if pid_alive "$pidf" "$mod"; then
@@ -70,8 +112,10 @@ stop_one(){ # stop_one NAME MODULE
 banner(){
   load_cfg
   RUNNER="$(pid_alive "$RUN_DIR/runner.pid" task_manager.runner && echo "RUNNING (pid $(cat "$RUN_DIR/runner.pid"))" || echo STOPPED)"
-  if pid_alive "$RUN_DIR/telegram.pid" telegram_bot.bot; then
-    TG="RUNNING (pid $(cat "$RUN_DIR/telegram.pid"))"
+  if pid_alive "$RUN_DIR/gateway.pid" gateway; then
+    TG="RUNNING: chat with Hermes (gateway pid $(cat "$RUN_DIR/gateway.pid"))"
+  elif pid_alive "$RUN_DIR/telegram.pid" telegram_bot.bot; then
+    TG="RUNNING: control bot (pid $(cat "$RUN_DIR/telegram.pid"))"
   elif [ -n "${TELEGRAM_BOT_TOKEN:-}" ]; then
     TG="STOPPED"
   else
@@ -83,11 +127,12 @@ banner(){
 ================================
 Hermes:       $([ -x "$(command -v hermes 2>/dev/null || echo $HOME/.local/bin/hermes)" ] && echo READY || echo MISSING)
 AI Provider:  ${MODEL_PROVIDER:-?} / ${MODEL_NAME:-default}
+Hermes model: $(python3 -c "import yaml,os;m=(yaml.safe_load(open(os.path.expanduser('~/.hermes/config.yaml'))) or {}).get('model') or {};print((m.get('base_url') or m.get('provider','?'))+' / '+str(m.get('default','?')))" 2>/dev/null || echo "not configured")
 Workspace:    $PWD
 Task Manager: $RUNNER
 Telegram:     $TG
 Waiting for tasks... (drop a task JSON in tasks/, or use Telegram /run)
-Logs:         logs/runner.out, logs/telegram.out
+Logs:         logs/runner.out, logs/gateway.out, logs/telegram.out
 Stop:         scripts/start-hermes.sh stop
 BANNER
 }
@@ -100,28 +145,23 @@ do_start(){
     start_one runner task_manager.runner runner.out || RC=1
   else
     echo "[FAIL] health check failed — run 'bash scripts/health-check.sh' for the full report."
-    if [ -n "${TELEGRAM_BOT_TOKEN:-}" ]; then
-      echo "[..] starting the Telegram bot anyway so you can control the box remotely (/health, /status)"
-      start_one telegram telegram_bot.bot telegram.out || true
-    fi
+    [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && { echo "[..] starting Telegram anyway"; start_telegram || true; }
     exit 1
   fi
-  if [ -n "${TELEGRAM_BOT_TOKEN:-}" ]; then
-    start_one telegram telegram_bot.bot telegram.out || RC=1
-  else
-    echo "[--] Telegram bot disabled (TELEGRAM_BOT_TOKEN not set)"
-  fi
+  start_telegram || RC=1
   banner
   exit "$RC"
 }
 
 do_stop(){
+  stop_one gateway gateway
   stop_one telegram telegram_bot.bot
   stop_one runner task_manager.runner
   # sweep any straggler that outlived its pidfile (e.g. after a crash)
   if command -v pkill >/dev/null 2>&1; then
     pkill -f "python3 -u -m task_manager.runner" 2>/dev/null || true
     pkill -f "python3 -u -m telegram_bot.bot" 2>/dev/null || true
+    pkill -f "hermes gateway run" 2>/dev/null || true
   fi
   echo "All services stopped."
 }

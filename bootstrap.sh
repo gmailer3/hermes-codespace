@@ -3,7 +3,11 @@
 #  Hermes Codespace — ZERO-TOUCH BOOTSTRAP
 #
 #  Fully automatic: no prompts, no menus, no model-setup wizard, no Telegram
-#  setup questions. Safe to re-run any time (idempotent). What it does:
+#  setup questions. Safe to re-run any time (idempotent).
+#  FIRST START ONLY configures Hermes; later starts only install what is
+#  missing and keep your Hermes settings untouched (--reconfigure to re-apply).
+#  In a Codespace ~/.hermes lives on /workspaces/.hermes-home (survives rebuilds).
+#  What it does:
 #    1. Installs base tooling + the NousResearch Hermes agent (if missing)
 #    2. Installs Python dependencies + Chromium (Playwright)
 #    3. Detects API keys / Telegram credentials from GitHub Codespaces secrets
@@ -35,10 +39,12 @@ set -euo pipefail
 
 NON_INTERACTIVE=0
 LAUNCH=0
+RECONFIGURE=0
 for a in "$@"; do
   case "$a" in
     --non-interactive|-n|--auto|-a) NON_INTERACTIVE=1 ;;   # default behaviour; kept for compatibility
     --launch|-l)                    LAUNCH=1 ;;
+    --reconfigure|-r)               RECONFIGURE=1 ;;   # re-apply secrets/model (normally first start only)
     -h|--help)                      if [ -f "$0" ]; then sed -n '2,30p' "$0" | sed 's/^#\{1,\} \{0,1\}//';
                                     else echo "Run 'bash bootstrap.sh --help' from inside the repo."; fi
                                     exit 0 ;;
@@ -84,6 +90,54 @@ apt_install(){ # apt_install PKG...
 INTERACTIVE=0
 [ "$NON_INTERACTIVE" = 0 ] && [ -t 0 ] && [ -t 1 ] && INTERACTIVE=1
 
+# --- keep ~/.hermes on the persistent /workspaces disk ---------------------------
+# Codespaces only guarantees /workspaces survives a container rebuild/recovery;
+# the home directory is recreated from the image then. Hermes keeps everything
+# it knows in ~/.hermes (config.yaml, .env, memories, sessions, skills,
+# on-start.d), so it lives on /workspaces/.hermes-home and ~/.hermes is a link.
+persist_hermes_home(){
+  local ws P H="$HOME/.hermes"
+  ws="$(dirname "$REPO_ROOT")"
+  [ -n "${CODESPACES:-}" ] || [ "$ws" = /workspaces ] || return 0   # plain Linux VM: leave as is
+  [ -w "$ws" ] || return 0
+  P="$ws/.hermes-home"
+  if [ -L "$H" ]; then return 0; fi                       # already linked
+  if [ -d "$H" ] && [ ! -e "$P" ]; then
+    mv "$H" "$P" || { warn "could not move ~/.hermes to $P"; return 0; }
+  elif [ -d "$H" ] && [ -d "$P" ]; then                   # both exist: persistent copy wins
+    cp -an "$H"/. "$P"/ 2>/dev/null || true
+    mv "$H" "$H.pre-persist-$(date +%s)"
+  fi
+  mkdir -p "$P" && ln -sfn "$P" "$H"
+}
+persist_hermes_home
+[ -L "$HOME/.hermes" ] && echo "[ OK ] ~/.hermes is stored on the persistent disk ($(readlink "$HOME/.hermes"))"
+
+# Hermes counts as installed if its launcher OR its install dir exists
+# (after a rebuild ~/.local/bin is gone but the persisted install is intact)
+find_hermes(){
+  have hermes && return 0
+  local c
+  for c in "$HOME/.hermes/hermes-agent/venv/bin/hermes" "$HOME/.hermes/hermes-agent/.venv/bin/hermes" \
+           "$HOME/.hermes/bin/hermes"; do
+    if [ -x "$c" ]; then mkdir -p "$HOME/.local/bin"; ln -sf "$c" "$HOME/.local/bin/hermes"; return 0; fi
+  done
+  return 1
+}
+
+install_terminal_hook(){ # every new Codespace terminal shows status + self-heals
+  local HOOK_LINE rc
+  HOOK_LINE="[ -n \"\${PS1:-}\" ] && [ -f '$REPO_ROOT/scripts/terminal-hook.sh' ] && bash '$REPO_ROOT/scripts/terminal-hook.sh'"
+  for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
+    [ -f "$rc" ] || [ "$rc" = "$HOME/.bashrc" ] || continue
+    touch "$rc"
+    if ! grep -q 'hermes-codespace terminal hook' "$rc" 2>/dev/null; then
+      printf '\n# hermes-codespace terminal hook\n%s\n' "$HOOK_LINE" >> "$rc"
+    fi
+  done
+  ok "terminal hook installed (new terminals show Hermes status)"
+}
+
 step "Hermes Codespace bootstrap (fully automatic — nothing to answer)"
 echo "OS: $(uname -s) ($(uname -m)) — repo: $REPO_ROOT"
 [ "$(uname -s)" = "Linux" ] || warn "not Linux — continuing best-effort"
@@ -110,8 +164,8 @@ ok "pip $(python3 -m pip --version 2>/dev/null | awk '{print $2}')"
 # next start automatically.
 step "2/7 Hermes agent"
 export PATH="$HOME/.local/bin:$HOME/.hermes/bin:$PATH"
-if have hermes; then
-  ok "Hermes already installed: $(command -v hermes)"
+if find_hermes; then
+  ok "Hermes already installed: $(command -v hermes) (not reinstalled)"
 else
   warn "Hermes not found — installing from NousResearch/hermes-agent (this can take a few minutes)"
   HERMES_INSTALL_URL="${HERMES_INSTALL_URL:-https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh}"
@@ -151,6 +205,33 @@ else
   python3 -m playwright install chromium >/dev/null || fail "Chromium install failed"
   browser_ok >/dev/null 2>&1 || fail "Browser automation check failed"
   ok "Chromium + browser automation"
+fi
+
+# --- first start only: everything below configures Hermes ----------------------
+# After the first successful setup we NEVER rewrite your Hermes configuration
+# again: no secrets re-copied, no model reset, no plugin/Telegram changes.
+# Anything you (or Hermes) set up later stays exactly as it is.
+# Force a re-apply (e.g. after adding a new Codespaces secret):
+#     bash bootstrap.sh --reconfigure
+SETUP_MARK="$HOME/.hermes/.codespace-setup-done"
+mkdir -p "$HOME/.hermes/on-start.d"
+if [ -f "$SETUP_MARK" ] && [ "$RECONFIGURE" = 0 ] && have hermes; then
+  step "5/7 Configuration"
+  ok "Hermes already configured on $(head -n1 "$SETUP_MARK"): keeping ALL your settings (nothing rewritten)"
+  echo "       new/changed Codespaces secrets? run: bash bootstrap.sh --reconfigure"
+  [ -f config/.env ] || cp config/config.example.env config/.env
+  # keep the repo's own plugin code current (code only, no settings touched)
+  if [ -d "$REPO_ROOT/hermes-plugins/codespace-guard" ]; then
+    mkdir -p "$HOME/.hermes/plugins/codespace-guard"
+    cp -f "$REPO_ROOT/hermes-plugins/codespace-guard"/*.py "$REPO_ROOT/hermes-plugins/codespace-guard"/*.yaml \
+          "$HOME/.hermes/plugins/codespace-guard"/ 2>/dev/null || true
+  fi
+  install_terminal_hook
+  chmod +x scripts/*.sh 2>/dev/null || true
+  if [ "$LAUNCH" = 1 ] || [ "$INTERACTIVE" = 1 ]; then
+    bash scripts/start-hermes.sh start || warn "services failed to start (see messages above)"
+  fi
+  exit 0
 fi
 
 # --- 5/7 config + Codespaces secrets ------------------------------------------
@@ -323,7 +404,8 @@ python3 scripts/configure-hermes.py || warn "could not write ~/.hermes/config.ya
 PLUG_SRC="$REPO_ROOT/hermes-plugins/codespace-guard"
 PLUG_DST="$HOME/.hermes/plugins/codespace-guard"
 if [ -d "$PLUG_SRC" ]; then
-  mkdir -p "$PLUG_DST" && cp -f "$PLUG_SRC"/* "$PLUG_DST"/
+  mkdir -p "$PLUG_DST"
+  cp -f "$PLUG_SRC"/*.py "$PLUG_SRC"/*.yaml "$PLUG_DST"/ 2>/dev/null || warn "could not copy plugin codespace-guard"
   if have hermes; then
     if timeout 60 hermes plugins enable codespace-guard </dev/null >/dev/null 2>&1; then
       ok "Hermes plugin codespace-guard enabled (blocks '!!!!' replies, screenshot hint)"
@@ -368,16 +450,18 @@ fi
 TELEGRAM_MODE="${TELEGRAM_MODE:-hermes}"
 write_env "$CFG" TELEGRAM_MODE "$TELEGRAM_MODE"
 
-# --- terminal hook: every new Codespace terminal shows status + self-heals -----
-HOOK_LINE="[ -n \"\${PS1:-}\" ] && [ -f '$REPO_ROOT/scripts/terminal-hook.sh' ] && bash '$REPO_ROOT/scripts/terminal-hook.sh'"
-for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
-  [ -f "$rc" ] || [ "$rc" = "$HOME/.bashrc" ] || continue
-  touch "$rc"
-  if ! grep -q 'hermes-codespace terminal hook' "$rc" 2>/dev/null; then
-    printf '\n# hermes-codespace terminal hook\n%s\n' "$HOOK_LINE" >> "$rc"
-  fi
-done
-ok "terminal hook installed (new terminals show Hermes status)"
+# --- terminal hook ---------------------------------------------------------------
+install_terminal_hook
+
+# --- remember that the first-time setup is done ----------------------------------
+# only once Hermes is installed AND its model is configured; otherwise the next
+# start tries again (e.g. secret added later, installer was unreachable)
+if have hermes && [ -f "$HOME/.hermes/.codespace-model.json" ]; then
+  date -u '+%Y-%m-%d %H:%M UTC' > "$SETUP_MARK"
+  ok "first-time setup complete: later starts keep your Hermes configuration untouched"
+else
+  warn "setup not complete yet (Hermes or model missing), it is retried on the next start"
+fi
 
 # --- 7/7 validation ------------------------------------------------------------
 step "7/7 Validation"

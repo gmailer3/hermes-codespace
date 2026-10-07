@@ -15,11 +15,11 @@
     "PYTHONPATH": "${containerWorkspaceFolder}/src"
   },
   "secrets": {
-    "NVIDIA_NIM_API_KEY": { "description": "PRIMARY: NVIDIA NIM key (build.nvidia.com -> Get API Key). Auto-configures GLM-5.3 via https://integrate.api.nvidia.com/v1. Aliases also detected: NVIDIA_API_KEY, NIM_API_KEY." },
-    "TELEGRAM_BOT_TOKEN": { "description": "Telegram bot token from @BotFather. Read straight from secrets — the bot starts automatically, no setup questions." },
+    "NVIDIA_NIM_API_KEY": { "description": "PRIMARY: NVIDIA NIM key (build.nvidia.com -> Get API Key). Auto-configures Hermes' native nvidia provider with z-ai/glm-5.3 via https://integrate.api.nvidia.com/v1. A secret named NVIDIA_API_KEY or NIM_API_KEY works too." },
+    "TELEGRAM_BOT_TOKEN": { "description": "Telegram bot token from @BotFather. Starts the Hermes gateway automatically so you chat with Hermes on Telegram." },
     "TELEGRAM_CHAT_ID": { "description": "Chat id(s) allowed to command the bot, comma-separated (alias TELEGRAM_CLIENT_ID also works). Send /start to the bot to learn your id." },
     "GEMINI_API_KEY": { "description": "Optional fallback provider: Google AI Studio key (aistudio.google.com/apikey)" },
-    "OPENROUTER_API_KEY": { "description": "Optional fallback provider: OpenRouter key (openrouter.ai/keys)" },
+    "OPENROUTER_API_KEY": { "description": "Optional (never the default): OpenRouter key. Use with HERMES_PROVIDER=openrouter or HERMES_FALLBACK_PROVIDER=openrouter" },
     "OPENAI_API_KEY": { "description": "Optional provider: OpenAI key (platform.openai.com)" },
     "ANTHROPIC_API_KEY": { "description": "Optional provider: Anthropic key (console.anthropic.com)" },
     "GLM_API_KEY": { "description": "Optional provider: Zhipu/GLM key (open.bigmodel.cn)" },

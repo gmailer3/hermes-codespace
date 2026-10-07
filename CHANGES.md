@@ -69,3 +69,20 @@ After updating: run `bash bootstrap.sh && bash scripts/start-hermes.sh restart`
 - Configs this repo wrote with Kimi are switched to GLM automatically; a model
   you picked yourself with `hermes model` is still kept.
 - Override any time: HERMES_MODEL / HERMES_PROVIDER secrets, or `hermes model`.
+
+# Round 6: configure ONCE, never wipe your Hermes setup on restart
+- bootstrap.sh configures Hermes on the FIRST start only (marker
+  ~/.hermes/.codespace-setup-done). Later starts: install Hermes/deps only if
+  missing, then start services. No secrets re-copied, no model/plugin/Telegram
+  changes. Re-apply on purpose: `bash bootstrap.sh --reconfigure`.
+- ~/.hermes (config, .env, memories, sessions, skills) now lives on the
+  persistent disk /workspaces/.hermes-home; ~/.hermes is a link. A Codespace
+  rebuild/recovery recreates the home folder, that used to erase Hermes' memory.
+- Hermes install detected by its install folder too, so it is never
+  reinstalled just because the launcher link vanished.
+- NEW ~/.hermes/on-start.d/*.sh: run on every start before the services.
+  Codespaces have no systemd and kill all background processes on stop, so
+  things like ControlD (ctrld) or /etc/resolv.conf edits must be re-applied.
+  The codespace-guard plugin tells Hermes to save such a script itself
+  whenever you ask it for DNS/daemon/system changes.
+- Fixed: plugin copy aborted the whole setup if a __pycache__ folder existed.
